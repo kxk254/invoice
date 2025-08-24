@@ -1,0 +1,96 @@
+{% extends "invoice/base.html" %}
+
+
+
+{% load humanize %} 
+
+
+{% block head_title %}
+    請求書CSV
+{% endblock %}
+{% load static %}
+{% block extra_head %}
+<style>
+    
+    
+    </style>
+{% endblock %}
+
+{% block content %}
+<form action="" method="get">
+    <div class="flex w-2/3 justify-start space-x-4 mb-5">
+        <!-- 取引先 (Company) Section -->
+  
+
+        <!-- 年月 (Month) Section -->
+        <div class="flex flex-col w-2/6 items-start space-y-2 mt-4">
+            <label for="months" class="flex items-center text-white mt-2 ms-4">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+                </svg>            
+                <span class="ms-2 items-center">年月</span>
+            </label>
+        </div>
+        <div class="mt-1 text-black block w-3/6">
+            <input type="date" name="start" value="{% if orig_start %}{{ orig_start }}{% else %}{{ start }}{% endif %}" class="block w-full px-2 py-1 border border-gray-300 rounded-md">
+        </div>
+        <div class="mt-1 text-black block w-3/6">
+            <input type="date" name="end" value="{% if orig_end %}{{ orig_end }}{% else %}{{ end }}{% endif %}" class="block w-full px-2 py-1 border border-gray-300 rounded-md">
+        </div>
+        <button type="submit" class="btn btn-success">選択</button>
+    </div>
+    
+</form>
+
+
+<div>
+        
+        <!-- Item Table (Initially hidden) -->
+
+        <div>
+            <table class="table table-xs w-full text-white">
+                <thead class="text-white">
+                    <tr>
+                        <th>取引先</th>
+                        <th>請求日</th>
+                        <th>支払期日</th>
+                        <th>該当月</th>
+                        <th>項目</th>
+                        <th>備考</th>
+                        <th>項目キー</th>
+                        <th>請求額</th>
+                        <th>税金</th>
+                        <th>税込売上額</th>
+                        <th>請求書キー</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in forms %}
+                        <tr>
+                            <td>{{ item.company }}</td>
+                            <td>{{ item.invoice_date }}</td>
+                            <td>{{ item.payment_due }}</td>
+                            <td>{{ item.action_date }}</td>
+                            <td>{{ item.action_name }}</td>
+                            <td>{{ item.action_note }}</td>
+                            <td>{{ item.item_code.name }}</td>
+                            <td class="text-right">{{ item.invoice_bt|intcomma }}</td>
+                            <td class="text-right">{{ item.invoice_tax|intcomma }}</td>
+                            <td class="text-right">{{ item.invoice_at|intcomma }}</td>
+                            <td>{{ item.slug }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+</div>
+
+<form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="start" value="{% if start %}{{ start }}{% else %}{{ orig_start }}{% endif %}" class="text-black">
+    <input type="hidden" name="end" value="{% if end %}{{ end }}{% else %}{{ orig_end }}{% endif %}" class="text-black">
+    <button type="submit" name="export_csv" class="btn btn-success btn-sm mt-3">弥生CSV</button>
+    <!-- Other buttons and form elements -->
+</form>
+
+
+{% endblock %}

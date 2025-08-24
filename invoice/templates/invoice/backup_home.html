@@ -1,0 +1,33 @@
+{% extends "solitonRE/base.html" %}
+
+
+{% block content %}
+
+    <h1>Database Backup Operations</h1>
+
+    <p>
+        Click the buttons below to perform backup operations.
+        Note: Step 2 copies the *most recently created* local backup file.
+    </p>
+
+    <div>
+        <a href="{% url 'solitonRE/local_db_backup' %}" class="btn">
+            1. Copy Local DB (with timestamp)
+        </a>
+    </div>
+
+    <div style="margin-top: 10px;">
+        <a href="{% url 'solitonRE/nas_db_backup' %}" class="btn">
+            2. Copy Latest Local Backup to NAS
+        </a>
+    </div>
+
+    <p style="margin-top: 20px; font-size: 0.9em; color: #666;">
+        Source: {{ SOURCE_DB_PATH }}<br>
+        Local Dir: {{ LOCAL_BACKUP_DIR }}<br>
+        NAS Dir: {{ NAS_BACKUP_DIR }}
+    </p>
+    
+
+{% endblock %}
+

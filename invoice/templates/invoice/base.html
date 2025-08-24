@@ -1,0 +1,48 @@
+{% load static %}
+{% load humanize %} 
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>
+        {% block head_title %}
+            SOLITON Invoice System
+        {% endblock %}
+    </title>
+
+    <!-- HTMX -->
+    <!-- <script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous"></script> -->
+    <script src="{% static 'js/htmx.min.js' %}"></script>
+    
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.14/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+
+    <!-- Custom files -->
+    <link href="{% static 'css/styles.css' %}" rel="stylesheet" />
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+    <script src="{% static 'js/script.js' %}"></script>
+
+    <link rel="icon" href="{% static 'images/favicon.ico' %}" type="image/x-icon">
+
+
+    {% block extra_head %}
+
+    {% endblock %}
+</head>
+<body>
+    
+    {% include 'invoice/partials/navbar.html' %}
+
+
+    {% block content %}
+
+
+    {% endblock %}
+
+
+    
+</body>
+</html>
