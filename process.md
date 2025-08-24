@@ -36,3 +36,4 @@ docker container prune
 docker network prune
 
 cp /mnt/nas/develop/invoice/invoice202506dep/db.sqlite3 /var/lib/docker/volumes/invoice202506dep_db_volume/_data
+
