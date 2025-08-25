@@ -18,7 +18,7 @@ services:
   nginx:
     image: nginx:latest
     ports:
-      - "8902:80"  #host machine port : nginx container port
+      - "8000:80"  #host machine port : nginx container port
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
       - static_volume:/usr/share/nginx/html/static
