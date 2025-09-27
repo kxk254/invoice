@@ -1,0 +1,32 @@
+
+
+services:
+  invoice:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    # command: /bin/bash -c "python manage.py collectstatic --noinput && python manage.py migrate --noinput && exec gunicorn core.wsgi:application --bind 0.0.0.0:8000"   #gunicorn binding address no need to change  inside the container
+    # && chown -R 101:101 /invoice/staticfiles /invoice/media
+    volumes:
+      - static_invoice:/invoice/staticfiles
+      - media_invoice:/invoice/media
+      - db_invoice:/invoice/db
+      - /mnt/nas/develop/invoice/db_backups:/invoice/nas_backups_mount  
+    env_file:
+      - .env
+
+  nginx:
+    image: nginx:latest
+    ports:
+      - "8702:80"  #host machine port : nginx container port
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - static_invoice:/usr/share/nginx/html/static
+      - media_invoice:/usr/share/nginx/html/media
+    depends_on:
+      - invoice
+  
+volumes:
+  static_invoice:
+  media_invoice:
+  db_invoice:

@@ -1,0 +1,21 @@
+# Compiled source #
+###################
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+*.out
+*.pyc
+*.pyo
+*.pyd
+*.dSYM/
+
+# OS generated files #
+######################
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+Desktop.ini
