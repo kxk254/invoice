@@ -1,4 +1,4 @@
-import os
+import os, subprocess
 import datetime
 import shutil
 import glob # Needed to find the latest file
@@ -98,3 +98,34 @@ def copy_to_nas():
         raise PermissionError(f"Permission denied. Cannot write to {NAS_BACKUP_DIR}. Check NAS access.")
     except Exception as e:
         raise Exception(f"An error occurred during NAS copy: {e}")
+
+
+def dump_postgres_to_json():    
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    filename = f"db_backup_{timestamp}.json"
+    backup_dir = NAS_BACKUP_DIR   
+    backup_path = os.path.join(backup_dir, filename)
+
+    try:
+        os.makedirs(os.path.dirname(backup_path), exist_ok=True)
+
+        with open(backup_path, "w") as f:
+            result = subprocess.run(
+                ["python", "manage.py", "dumpdata", "--natural-primary", "--natural-foreign", "--indent", "2"],
+                cwd="/invoice", 
+                stdout=f,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+        
+        # Confirm file was created
+        if not os.path.isfile(backup_path):
+            raise FileNotFoundError(f"Backup file was not created: {backup_path}")
+
+        return backup_path
+
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"Subprocess failed: {e.stderr}")
+    except Exception as e:
+        raise Exception(f"Failed to create backup: {e}")

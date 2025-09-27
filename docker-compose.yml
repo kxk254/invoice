@@ -10,10 +10,22 @@ services:
     volumes:
       - static_invoice:/invoice/staticfiles
       - media_invoice:/invoice/media
-      - db_invoice:/invoice/db
+      # - db_invoice:/invoice/db
       - /mnt/nas/develop/invoice/db_backups:/invoice/nas_backups_mount  
     env_file:
       - .env
+
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: invoice
+      POSTGRES_USER: konno
+      POSTGRES_PASSWORD: supersecurepassword
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_invoice:/var/lib/postgresql/data
 
   nginx:
     image: nginx:latest
@@ -29,4 +41,5 @@ services:
 volumes:
   static_invoice:
   media_invoice:
-  db_invoice:
+  # db_invoice:
+  postgres_invoice:

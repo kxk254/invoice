@@ -6,7 +6,7 @@
         <span>
             <img class="w-10 h-10 mr-2" src="{% static 'images/invoice.svg' %}" />
         </span>
-        <span class="self-center text-2xl font-semibold whitespace-nowrap">Invoice Manager v1.1</span>
+        <span class="self-center text-2xl font-semibold whitespace-nowrap">Invoice Manager v1.1.1-pg</span>
       </a>
       {% if user.is_authenticated %}
       
@@ -50,17 +50,17 @@
             </a>
         </li>
         <li>
-            <a href="{% url 'invoice:local_db_backup' %}"
+            <a href="{% url 'invoice:postgres-backup' %}"
                 class="block py-2 pl-3 pr-4 text-white rounded md:p-0" 
                 aria-current="page">
                 BKUP
             </a>
         </li>
         <li>
-            <a href="{% url 'invoice:nas_db_backup' %}"
+            <a href="{% url 'invoice:restore-db' %}"
                 class="block py-2 pl-3 pr-4 text-white rounded md:p-0" 
                 aria-current="page">
-                toNAS
+                upLoad
             </a>
         </li>
     
