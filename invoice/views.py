@@ -1,4 +1,4 @@
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.http import HttpResponseRedirect, HttpResponse
 from django.views.generic import View, ListView, DetailView
 from django.urls import reverse_lazy, reverse
@@ -12,6 +12,7 @@ from django.utils import timezone
 from datetime import datetime
 import os, subprocess
 from .  import backup_logic
+from django.contrib.auth import logout
 
 # Create your views here.
 @login_required
@@ -322,3 +323,23 @@ def restore_view(request):
             os.remove(temp_path)
     else:
         return render(request, "invoice/restore_postgres.html")
+
+
+"""
+UPDATED BACKUP UPON LOGOFF 2025/12/25
+"""
+def logout_and_backup_view(request):
+    # Step 1: Trigger NAS backup
+    try:
+        backup_path = backup_logic.dump_postgres_to_json_to_nas()
+        filename = os.path.basename(backup_path)
+        # Optionally: show a message to the user
+        print(f"NAS backup successful: {filename}")
+    except Exception as e:
+        print(f"NAS backup error: {e}")  # or log it properly
+
+    # Step 2: Logout user
+    logout(request)
+
+    # Step 3: Redirect to login page (or homepage)
+    return redirect('account_login')  # change to your login URL name

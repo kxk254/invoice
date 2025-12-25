@@ -65,12 +65,14 @@
         </li>
     
             <li>
-                <a href="{% url 'account_logout' %}" 
+                <a href="{% url 'invoice:logout_backup' %}" 
                     class="block py-2 pl-3 pr-4 text-white rounded md:p-0" 
                     aria-current="page">
                         Logout
                 </a>
             </li>
+
+
             {% else %}
             <li>
                 <a href="{% url 'account_login' %}" 
@@ -92,3 +94,13 @@
     </div>
   </nav>
   
+
+
+<!-- <li>
+                <a href="{% url 'account_logout' %}" 
+                    class="block py-2 pl-3 pr-4 text-white rounded md:p-0" 
+                    aria-current="page">
+                        Login
+                </a>
+            </li>
+            <li> -->
