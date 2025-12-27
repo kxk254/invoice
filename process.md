@@ -39,3 +39,10 @@ cp /mnt/nas/develop/invoice/invoice202506dep/db.sqlite3 /var/lib/docker/volumes/
 
 
 COMPOSE_PROJECT_NAME=invoice202506dep docker compose up -d
+
+### Database Initiation
+docker exec -i invoice-db-1 psql -U konno -d postgres -c "DROP DATABASE IF EXISTS invoice;"
+
+docker exec -i invoice-db-1 psql -U konno -d postgres -c "CREATE DATABASE invoice;"
+
+docker exec -i invoice-db-1 psql -U konno -d invoice < ss.sql
