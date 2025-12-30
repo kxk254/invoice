@@ -7,6 +7,8 @@ services:
       dockerfile: Dockerfile
     # command: /bin/bash -c "python manage.py collectstatic --noinput && python manage.py migrate --noinput && exec gunicorn core.wsgi:application --bind 0.0.0.0:8000"   #gunicorn binding address no need to change  inside the container
     # && chown -R 101:101 /invoice/staticfiles /invoice/media
+    container_name: app-invoice
+    restart: always
     volumes:
       - static_invoice:/invoice/staticfiles
       - media_invoice:/invoice/media
@@ -19,6 +21,7 @@ services:
   db:
     image: postgres:15
     restart: always
+    container_name: db-invoice
     environment:
       POSTGRES_DB: invoice
       POSTGRES_USER: konno
@@ -30,6 +33,7 @@ services:
 
   nginx:
     image: nginx:latest
+    container_name: ngx-invoice
     ports:
       - "8702:80"  #host machine port : nginx container port
     volumes:
