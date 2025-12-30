@@ -1,0 +1,12 @@
+{% extends "invoice/base.html" %}
+
+
+{% block content %}
+
+<form method="POST" action="/restore/" enctype="multipart/form-data">
+  {% csrf_token %}
+  <input type="file" name="json_file" accept=".json" required>
+  <button type="submit">Restore Database</button>
+</form>
+
+{% endblock %}

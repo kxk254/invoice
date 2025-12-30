@@ -21,4 +21,11 @@ urlpatterns = [
 
     # URL to trigger the NAS copy (copies the latest local backup)
     path('backup/nas/', views.nas_db_backup_view, name='nas_db_backup'),
+
+    # POSTGRES
+    path('postgres_backup/', views.postgres_db_backup_to_nas_as_json, name='postgres-backup'),
+    path('restore/', views.restore_view, name='restore-db'),
+
+    # added 2025/12/25 for UPDATE upon logoff
+    path('logout-backup/', views.logout_and_backup_view, name='logout_backup'),
 ]

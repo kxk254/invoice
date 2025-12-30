@@ -1,4 +1,4 @@
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.http import HttpResponseRedirect, HttpResponse
 from django.views.generic import View, ListView, DetailView
 from django.urls import reverse_lazy, reverse
@@ -10,8 +10,9 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.utils import timezone
 from datetime import datetime
-import os
+import os, subprocess
 from .  import backup_logic
+from django.contrib.auth import logout
 
 # Create your views here.
 @login_required
@@ -273,3 +274,72 @@ def backup_home_view(request):
         'NAS_BACKUP_DIR': backup_logic.NAS_BACKUP_DIR,
     }
     return render(request, 'invoice/backup_home.html', context) # You'll create this template next
+
+"""
+CREATE POSTGRES DATABASE BACKUP
+"""
+def postgres_db_backup_to_nas_as_json(request):
+    """Django view to dump json data as backup to NAS."""
+    try:
+        local_copy_path = backup_logic.dump_postgres_to_json()
+        filename = os.path.basename(local_copy_path)
+        # Success message, maybe include the filename
+        return HttpResponse(f"Successfully dump json data to NAS:<br>{filename}<br><br>{local_copy_path}")
+    except FileNotFoundError as e:
+        return HttpResponse(f"Error: {e}", status=404) # Not Found
+    except PermissionError as e:
+        return HttpResponse(f"Error: {e}", status=403) # Forbidden
+    except Exception as e:
+        # Catch any other exceptions from the logic
+        return HttpResponse(f"An unexpected error occurred during local backup: {e}", status=500) # Internal Server Error
+
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
+def restore_view(request):
+    if request.method == "POST":
+        json_file = request.FILES.get("json_file")
+        if not json_file:
+            return HttpResponse("No file uploaded", status=400)
+        
+        # save temporary
+        temp_path = f"/tmp/{json_file.name}"
+        with open(temp_path, "wb+") as f:
+            for chunk in json_file.chunks():
+                f.write(chunk)
+        
+        # Load into DB
+        try:
+            # ⚠️ Wipe all existing data
+            subprocess.run(["python", "manage.py", "flush", "--noinput"], check=True)
+            
+            # ✅ Load new data
+            subprocess.run(["python", "manage.py", "loaddata", temp_path], check=True)
+            
+            return HttpResponse(f"Restored database from {json_file.name}")
+        except subprocess.CalledProcessError as e:
+            return HttpResponse(F"Restore failed: {e}", status=500)
+        finally:
+            os.remove(temp_path)
+    else:
+        return render(request, "invoice/restore_postgres.html")
+
+
+"""
+UPDATED BACKUP UPON LOGOFF 2025/12/25
+"""
+def logout_and_backup_view(request):
+    # Step 1: Trigger NAS backup
+    try:
+        backup_path = backup_logic.dump_postgres_to_json_to_nas()
+        filename = os.path.basename(backup_path)
+        # Optionally: show a message to the user
+        print(f"NAS backup successful: {filename}")
+    except Exception as e:
+        print(f"NAS backup error: {e}")  # or log it properly
+
+    # Step 2: Logout user
+    logout(request)
+
+    # Step 3: Redirect to login page (or homepage)
+    return redirect('account_login')  # change to your login URL name
