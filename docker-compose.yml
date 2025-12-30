@@ -14,7 +14,6 @@ services:
       - media_invoice:/invoice/media
       # - db_invoice:/invoice/db
       - /mnt/nas/develop/invoice/db_backups:/invoice/nas_backups_mount  
-    restart: always
     env_file:
       - .env
 
