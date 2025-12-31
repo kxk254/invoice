@@ -281,7 +281,7 @@ CREATE POSTGRES DATABASE BACKUP
 def postgres_db_backup_to_nas_as_json(request):
     """Django view to dump json data as backup to NAS."""
     try:
-        local_copy_path = backup_logic.dump_postgres_to_json()
+        local_copy_path = backup_logic.dump_postgres_to_json_to_nas()
         filename = os.path.basename(local_copy_path)
         # Success message, maybe include the filename
         return HttpResponse(f"Successfully dump json data to NAS:<br>{filename}<br><br>{local_copy_path}")
