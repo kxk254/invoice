@@ -54,6 +54,11 @@ git fetch --prune
 git checkout main
 git pull --ff-only
 
+### delete local branch
+git branch -d <branch_name>
+#### if not merged
+git branch -D <branch_name>
+
 ### When starting new work
 git checkout -b feature/foo
 
