@@ -12,6 +12,9 @@
 *.pyd
 *.dSYM/
 
+.venv/
+db/backups/
+
 # OS generated files #
 ######################
 .DS_Store

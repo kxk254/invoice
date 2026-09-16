@@ -1,5 +1,5 @@
 import math, csv
-from .models import AccountItem, InvoiceCode, Company
+from .models import AccountItem, InvoiceCode, Client
 from django.db.models import Sum
 from datetime import datetime, timedelta
 from django.db import IntegrityError
@@ -19,9 +19,9 @@ from pathlib import Path
 '''
 Set Invoice ID for invoice generation
 '''
-def set_invoice_code():
-    
-    accounts = AccountItem.objects.filter(flag=False)
+def set_invoice_code(organization):
+
+    accounts = AccountItem.objects.filter(flag=False, organization=organization)
     if accounts.exists():
         for account in accounts:
             report_date_formatted = account.invoice_date.strftime("%Y%m") if account.invoice_date else "000000"
@@ -67,9 +67,9 @@ def set_invoice_code():
 """
 
 """
-def invoice_code_slug_save():
+def invoice_code_slug_save(organization):
     """Override save method to delete old slugs and reassign new ones."""
-    qs = InvoiceCode.objects.all()
+    qs = InvoiceCode.objects.filter(account_item__organization=organization)
     for q in qs:
         if q.account_item.invoice_date:
             mmdate = q.account_item.invoice_date.strftime('%Y%m')
@@ -83,10 +83,10 @@ def invoice_code_slug_save():
 """
 Calculate Total Amount use for InvoiceCode
 """
-def total_amount_calc():
-    revenues = AccountItem.objects.all()
+def total_amount_calc(organization):
+    revenues = AccountItem.objects.filter(organization=organization)
     # all_invoices = InvoiceId.objects.filter(revenue_at_ttl=0)
-    all_invoices = InvoiceCode.objects.all()
+    all_invoices = InvoiceCode.objects.filter(account_item__organization=organization)
 
     for invoice in all_invoices:
 
@@ -174,11 +174,11 @@ def preprocess_post_data(post_data):
 
     return cleaned_data
 
-def tax_calc_def(selected_company, selected_month):
-        queryset = AccountItem.objects.all()  # Use your model's queryset
+def tax_calc_def(organization, selected_company, selected_month):
+        queryset = AccountItem.objects.filter(organization=organization)
 
         # Filter by the selected bukken if provided
-        _, start_of_month, end_of_month = strip_date(selected_month) 
+        _, start_of_month, end_of_month = strip_date(selected_month)
         if selected_company == "" or selected_company is None:
             queryset = queryset.filter(invoice_date__gte=start_of_month, invoice_date__lte=end_of_month)
         else:
@@ -211,16 +211,16 @@ kwargs = {
     'slug': slug, 
     }
 """
-def prepare_invoice_items(slug):
+def prepare_invoice_items(organization, slug, interactive=False):
     # print("5000 kwargs print", slug)
-    context = {}
-    invoicecode = InvoiceCode.objects.get(account_item_slug=slug['slug'])
+    context = {'interactive': interactive}
+    invoicecode = InvoiceCode.objects.get(account_item_slug=slug['slug'], account_item__organization=organization)
     # print("invoicecode 5000  print", invoicecode)
-    
+
     _, month_ym, _ = strip_date(str(invoicecode.account_item.invoice_date))
     date_obj = datetime.strptime(str(invoicecode.account_item.invoice_date), "%Y-%m-%d")
     act_date = datetime.strptime(str(invoicecode.account_item.action_date), "%Y-%m-%d")
-    accountitem = AccountItem.objects.filter(slug=slug['slug']).order_by('-invoice_date', 'item_code')
+    accountitem = AccountItem.objects.filter(slug=slug['slug'], organization=organization).order_by('-invoice_date', 'item_code')
     # print("accountitem 5000  print", accountitem)
     # 請求書のアイテム毎金額を取得
     context['slug'] = slug
@@ -244,8 +244,8 @@ def prepare_invoice_items(slug):
     context['act_date_year'] = act_date.strftime('%Y')
     context['act_date_month'] = act_date.strftime('%m')
     
-    # 銀行情報
-    my_company = Company.objects.get(pk=2)
+    # 銀行情報 (issuer = the requesting organization itself)
+    my_company = organization
     context['bank_name'] = my_company.bank_account.name
     context['branch_name'] = my_company.bank_account.branch_name
     context['branch_code'] = my_company.bank_account.branch_code
@@ -276,6 +276,7 @@ def prepare_invoice_items(slug):
         'today': datetime.today(),
         'slug': slug,
         'filename':context['filename'],
+        'interactive': False,
 
     # 物件番号、レポート日、部屋番号、請求書番号を取得
         'selected_company': invoicecode.account_item.company.name,
@@ -349,25 +350,14 @@ def modify_html_for_weasyprint(html_content):
 """
 PDFの確認
 """
-def preview_email_before_send(request, **kwargs):
-    context = prepare_invoice_items(kwargs)
+def preview_email_before_send(request, organization, **kwargs):
+    context = prepare_invoice_items(organization, kwargs)
 
     html_content_modified = modify_html_for_weasyprint(context['html_content'])
 
     try:
-        # Generate PDF in memory
-        pdf_buffer = io.BytesIO()
-        
-        print("today", datetime.today())
-        HTML(string=html_content_modified).write_pdf(pdf_buffer, stylesheets=[CSS(string='@page { size: A4; margin: 1cm; }')])
-        pdf_buffer.seek(0)
-        # print("context['html_content']///////", context['html_content'])
-        # Base64 encode the PDF for embedding in HTML
-        pdf_base64 = base64.b64encode(pdf_buffer.read()).decode('utf-8')
-        pdf_buffer.seek(0)
-
-        with open("output.pdf", "wb") as f:
-            f.write(pdf_buffer.read())
+        pdf_bytes = HTML(string=html_content_modified).write_pdf(stylesheets=[CSS(string='@page { size: A4; margin: 1cm; }')])
+        pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
     except Exception as e:
         print(f"Error generating PDF: {e}")
     
@@ -384,19 +374,23 @@ def preview_email_before_send(request, **kwargs):
 
 
 """
-PDFの作成
+PDFの作成 (shared by the classic Django view and the API)
 """
-def generate_pdf(request, **kwargs):
-        context = prepare_invoice_items(kwargs)
+def render_invoice_pdf(organization, slug):
+    context = prepare_invoice_items(organization, {'slug': slug})
+    html_content_modified = modify_html_for_weasyprint(context['html_content'])
+    pdf_bytes = weasyprint.HTML(string=html_content_modified).write_pdf(
+        stylesheets=[CSS(string='@page { size: A4; margin: 1cm; }')]
+    )
+    return pdf_bytes, context['encoded_filename']
 
-        html_content_modified = modify_html_for_weasyprint(context['html_content'])
 
-        pdf_file = weasyprint.HTML(string=html_content_modified).write_pdf(stylesheets=[CSS(string='@page { size: A4; margin: 1cm; }')])
+def generate_pdf(request, organization, **kwargs):
+        pdf_file, encoded_filename = render_invoice_pdf(organization, kwargs['slug'])
 
-        # Convert the HTML content to PDF
         response = HttpResponse(pdf_file, content_type='application/pdf')
         response['Content-Disposition'] = (
-            f'attachment; filename="{context["encoded_filename"]}.pdf"; '
+            f'attachment; filename="{encoded_filename}.pdf"; '
         )
         response['Content-Type'] = 'application/octet-stream'  # Forcing download
 
@@ -406,10 +400,13 @@ def generate_pdf(request, **kwargs):
 EXPORT TO CSV 請求書
 '''
 def export_to_csv(queryset, st, ed):
-        response = HttpResponse(content_type='text/csv', charset='utf_8_sig')
-        response['Content-Disposition'] = f"attachment; filename = {st}-{ed}-Invoice_list.csv"
-        # response.write("\xEF\xBB\xBF")
-        writer = csv.writer(response, delimiter=',')
+        # Build the CSV in memory first and encode once with a single
+        # leading BOM. Writing straight to an HttpResponse with
+        # charset='utf_8_sig' re-encodes (and re-prepends a BOM onto) every
+        # csv.writer.writerow() call individually, corrupting every row
+        # after the first with a stray BOM.
+        buffer = io.StringIO()
+        writer = csv.writer(buffer, delimiter=',')
 
         # writer.writerow(['年', '月', '日', '収入',
         #                  '支出', '適用', '補助科目', '請求書区分', 
@@ -436,5 +433,7 @@ def export_to_csv(queryset, st, ed):
                 適用,
                 請求書区分,
             ])
-        
+
+        response = HttpResponse(buffer.getvalue().encode('utf_8_sig'), content_type='text/csv')
+        response['Content-Disposition'] = f"attachment; filename = {st}-{ed}-Invoice_list.csv"
         return response

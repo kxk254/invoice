@@ -1,5 +1,5 @@
 from django import forms
-from .models import BankAccount, Company, AccountItem, InvoiceCode
+from .models import BankAccount, Client, AccountItem, InvoiceCode
 from django.forms import modelformset_factory
 
 
@@ -12,7 +12,7 @@ class AccountItemForm(forms.ModelForm):
     
     class Meta:
         model = AccountItem
-        fields = '__all__'
+        exclude = ['organization']
         widgets = {
             'invoice_bt': forms.TextInput(attrs={
 
@@ -32,7 +32,7 @@ class AccountItemForm(forms.ModelForm):
             }),
         }
 
-AccountItemFormSet = modelformset_factory(AccountItem, form=AccountItemForm, fields='__all__', extra=1, can_delete=True)
+AccountItemFormSet = modelformset_factory(AccountItem, form=AccountItemForm, extra=1, can_delete=True)
 
 """
 請求書コードを修正

@@ -1,7 +1,44 @@
 from django.db import models
+from django.conf import settings
 import datetime
 import calendar
 from datetime import date
+
+
+class Organization(models.Model):
+    """A tenant of the SaaS product (one SME customer). Also holds the
+    tenant's own issuer details (bank account, address, etc.) used when
+    generating invoices, replacing the old hardcoded "my company" row."""
+    name = models.CharField(verbose_name="組織名", max_length=100)
+    slug = models.SlugField(verbose_name="組織キー", max_length=50, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    bank_account = models.ForeignKey("BankAccount", verbose_name="銀行名", on_delete=models.SET_NULL, null=True, blank=True)
+    register_no = models.CharField(verbose_name="登録番号", max_length=20, blank=True, null=True)
+    post_code = models.CharField(verbose_name="〒", max_length=20, blank=True, null=True)
+    address1 = models.CharField(verbose_name="住所１", max_length=150, default="", blank=True)
+    address2 = models.CharField(verbose_name="住所２", max_length=150, default="", blank=True, null=True)
+    tel = models.CharField(verbose_name="電話", max_length=50, default="", blank=True, null=True)
+    email = models.EmailField(verbose_name="Email", max_length=100, default="", blank=True, null=True)
+
+    def __str__(self):
+        return self.name
+
+
+class OrganizationMembership(models.Model):
+    class Role(models.TextChoices):
+        OWNER = "owner", "Owner"
+        STAFF = "staff", "Staff"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="memberships")
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="memberships")
+    role = models.CharField(max_length=10, choices=Role.choices, default=Role.STAFF)
+
+    class Meta:
+        unique_together = ("user", "organization")
+
+    def __str__(self):
+        return f"{self.user} @ {self.organization} ({self.role})"
 
 
 class BankAccount(models.Model):
@@ -18,7 +55,9 @@ class BankAccount(models.Model):
 
 
 # Create your models here.
-class Company(models.Model):
+class Client(models.Model):
+    """A company that this organization (tenant) issues invoices to."""
+    organization = models.ForeignKey(Organization, verbose_name="組織", on_delete=models.CASCADE, related_name="clients")
     name = models.CharField(verbose_name="会社名", max_length=50)
     bank_account = models.ForeignKey(BankAccount, verbose_name="銀行名", on_delete=models.CASCADE)
     short_name = models.CharField(verbose_name="短縮名", max_length=20)
@@ -33,8 +72,9 @@ class Company(models.Model):
 
     def __str__(self):
         return self.short_name
-    
+
 class ItemCode(models.Model):
+    organization = models.ForeignKey(Organization, verbose_name="組織", on_delete=models.CASCADE, related_name="item_codes")
     name = models.CharField(verbose_name="項目名", max_length=50)
     short_name = models.CharField(verbose_name="短縮名", max_length=20)
     tax_rate = models.CharField(verbose_name="税率", max_length=20, blank=True, null=True)
@@ -91,7 +131,8 @@ class AccountItem(models.Model):
         # Retrieve the ItemCode instance with the code "C01"
         return ItemCode.objects.get(slug="C01")
     
-    company = models.ForeignKey(Company, verbose_name="取引先", on_delete=models.PROTECT)
+    organization = models.ForeignKey(Organization, verbose_name="組織", on_delete=models.CASCADE, related_name="account_items")
+    company = models.ForeignKey(Client, verbose_name="取引先", on_delete=models.PROTECT)
     invoice_date = models.DateField(verbose_name="請求日", default=get_start_of_this_month, blank=True, null=True)
     payment_due = models.DateField(verbose_name="支払期日", default=get_end_of_this_month, blank=True, null=True)
     action_date = models.DateField(verbose_name="該当月", default=get_first_of_last_month, blank=True, null=True)

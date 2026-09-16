@@ -2,7 +2,7 @@ from django.shortcuts import render, redirect
 from django.http import HttpResponseRedirect, HttpResponse
 from django.views.generic import View, ListView, DetailView
 from django.urls import reverse_lazy, reverse
-from .models import AccountItem, Company, InvoiceCode, CsvDate
+from .models import AccountItem, Client, InvoiceCode, CsvDate
 from . import calc
 from .calc import strip_date
 from .forms import AccountItemFormSet
@@ -13,13 +13,15 @@ from datetime import datetime
 import os, subprocess
 from .  import backup_logic
 from django.contrib.auth import logout
+from .api.permissions import get_active_organization
 
 # Create your views here.
 @login_required
 def index(request):
-    calc.set_invoice_code()
-    calc.invoice_code_slug_save()
-    calc.total_amount_calc()
+    organization = get_active_organization(request.user)
+    calc.set_invoice_code(organization)
+    calc.invoice_code_slug_save(organization)
+    calc.total_amount_calc(organization)
     return render(request, 'invoice/index.html')
 
 
@@ -35,6 +37,7 @@ class AccountItemUpdateView(LoginRequiredMixin, View):
 
     def get_context_data(self, **kwargs):
         context = {}
+        organization = get_active_organization(self.request.user)
         selected_company = self.request.GET.get('company')
         if selected_company == "" or selected_company is None:
             selected_company = ""
@@ -46,19 +49,21 @@ class AccountItemUpdateView(LoginRequiredMixin, View):
         if selected_company == "" or selected_company is None:
             print("passing 102")
             queryset = AccountItem.objects.filter(
+                organization=organization,
                 invoice_date__gte=start_month,
                 invoice_date__lte=end_of_month,
                 ).order_by('-item_code__slug', 'invoice_date')
         else:
             print("passing 103")
             queryset = AccountItem.objects.filter(
-                company=Company.objects.get(id=selected_company),
+                organization=organization,
+                company=Client.objects.get(id=selected_company, organization=organization),
                 invoice_date__gte=start_month,
                 invoice_date__lte=end_of_month,
                 ).order_by('-item_code__slug', 'invoice_date')
-        
+
         formset = AccountItemFormSet(queryset=queryset)
-        context['companies'] = Company.objects.all()  # Assuming Bukken is your model name
+        context['companies'] = Client.objects.filter(organization=organization)  # Assuming Bukken is your model name
         context['selected_company'] = selected_company  # Selected bukken value
         context['selected_month'] = selected_month  # Selected month value
         context['formset'] = formset  # Formset for the selected month
@@ -66,9 +71,10 @@ class AccountItemUpdateView(LoginRequiredMixin, View):
         return context
     
     def post(self, request, *args, **kwargs):
-        
+
+        organization = get_active_organization(request.user)
         selected_company = request.POST.get('company', None)
-        selected_month = request.POST.get('month', None) 
+        selected_month = request.POST.get('month', None)
         if selected_company == "":
             selected_company = ""  # Treat as no filter for company (all companies)
         url = reverse('invoice:update')  # This gets the URL pattern for '売上-input'
@@ -76,14 +82,19 @@ class AccountItemUpdateView(LoginRequiredMixin, View):
         redirect_url = f'{url}{query_params}'
 
         if 'tax_calc' in request.POST:
-            calc.tax_calc_def(selected_company, selected_month)
+            calc.tax_calc_def(organization, selected_company, selected_month)
             return HttpResponseRedirect(redirect_url)
-        
+
         processed_request = calc.preprocess_post_data(self.request.POST)
         formset = AccountItemFormSet(processed_request)
-        
+
         if formset.is_valid():
-            formset.save()
+            instances = formset.save(commit=False)
+            for instance in instances:
+                instance.organization = organization
+                instance.save()
+            for obj in formset.deleted_objects:
+                obj.delete()
             print("formset was saved")
             return HttpResponseRedirect(redirect_url)
         else:
@@ -100,19 +111,21 @@ class RevenueListView(LoginRequiredMixin, ListView):
     template_name = 'invoice/invoice_list.html'
 
     def get_context_data(self, **kwargs):
-        companies = Company.objects.all()
+        organization = get_active_organization(self.request.user)
+        companies = Client.objects.filter(organization=organization)
         company = self.request.GET.get('company')
         month = self.request.GET.get('month') if self.request.GET.get('month') else timezone.now().strftime('%Y-%m-%d')
         _, start_month, eom = strip_date(month)
         invoices = InvoiceCode.objects.filter(
-            account_item__invoice_date__gte=start_month, 
+            account_item__organization=organization,
+            account_item__invoice_date__gte=start_month,
             account_item__invoice_date__lte=eom
             ).order_by('-payment_due')
         invoice_data = []
 
 
         for invoice in invoices:
-            items = AccountItem.objects.filter(company=invoice.account_item.company, invoice_date__gte=start_month, invoice_date__lte=eom).order_by('item_code', '-invoice_date')
+            items = AccountItem.objects.filter(organization=organization, company=invoice.account_item.company, invoice_date__gte=start_month, invoice_date__lte=eom).order_by('item_code', '-invoice_date')
             print(f"Filtering Revenue for Invoice ID: {invoice.account_item_slug}, Month: {start_month}")
             print("items", items)
             invoice_data.append({
@@ -140,7 +153,8 @@ class PdfCreateDetailView(LoginRequiredMixin, DetailView):
     context_object_name = 'contract'
 
     def get_object(self):
-        queryset = AccountItem.objects.all()
+        organization = get_active_organization(self.request.user)
+        queryset = AccountItem.objects.filter(organization=organization)
         print("kwargs 2001 ====", self.kwargs)
         # Capture the contract_id, selected_bukken, and selected_month from the URL
 
@@ -156,34 +170,36 @@ class PdfCreateDetailView(LoginRequiredMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         # You can also pass the selected_bukken and selected_month if you need them in the template
-        context = calc.prepare_invoice_items(self.kwargs)
+        organization = get_active_organization(self.request.user)
+        context = calc.prepare_invoice_items(organization, self.kwargs, interactive=True)
 
         return context
 
     def post(self, request, *args, **kwargs):
 
         if 'create_pdf' in request.POST:
-           
+
             import ast
             slug = request.POST.get('slug')
             slug = ast.literal_eval(slug)
             kwargs = slug
+            organization = get_active_organization(request.user)
             # print("kwargs in pdf", slug)
             # return calc.generate_pdf(request, **slug)
-            return calc.preview_email_before_send(request, **slug)
+            return calc.preview_email_before_send(request, organization, **slug)
 
+@login_required
 def pdfcreate(request, slug):
-    slug = {
-        'slug':slug,
-    }
-    return calc.generate_pdf(request, **slug)
+    organization = get_active_organization(request.user)
+    return calc.generate_pdf(request, organization, slug=slug)
 
 class CSVListView(LoginRequiredMixin, ListView):
     template_name = 'invoice/invoice_csv_list.html'
     model = AccountItem
 
     def get_context_data(self, **kwargs):
-        queryset = AccountItem.objects.all() # Article.objects.all() と同じ結果
+        organization = get_active_organization(self.request.user)
+        queryset = AccountItem.objects.filter(organization=organization) # Article.objects.all() と同じ結果
 
         orig_start = CsvDate.objects.get(pk=1)
         orig_start = str(orig_start.csvdate)
@@ -203,6 +219,7 @@ class CSVListView(LoginRequiredMixin, ListView):
     
     def post(self, *args, **kwargs):
 
+        organization = get_active_organization(self.request.user)
         start = self.request.POST.get('start')
         _, start, _ = strip_date(start)
         end = self.request.POST.get('end')
@@ -211,7 +228,7 @@ class CSVListView(LoginRequiredMixin, ListView):
         query_params = f'?start={start}&end={end}'
         redirect_url = f'{url}{query_params}'
 
-        queryset = AccountItem.objects.filter(action_date__gte=start, action_date__lte=end)
+        queryset = AccountItem.objects.filter(organization=organization, action_date__gte=start, action_date__lte=end)
         st = datetime.strptime(str(start), "%Y-%m-%d")
         ed = datetime.strptime(str(end), "%Y-%m-%d")
         st = st.strftime("%Y%m")
