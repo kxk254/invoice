@@ -139,6 +139,7 @@ class AccountItem(models.Model):
     action_name = models.CharField(verbose_name="項目", default="業務委託費", max_length=150, blank=True, null=True)
     action_note = models.CharField(verbose_name="備考", max_length=150, default='', blank=True, null=True)
     item_code = models.ForeignKey(ItemCode, verbose_name="項目キー", default=default_item_code, on_delete=models.PROTECT)
+    tax_rate = models.PositiveSmallIntegerField(verbose_name="税率(%)", default=10)
     invoice_bt = models.IntegerField(verbose_name="請求額", default=0)
     invoice_tax = models.IntegerField(verbose_name="税金", default=0)
     invoice_at = models.IntegerField(verbose_name="税込請求額", default=0)
@@ -164,7 +165,8 @@ class InvoiceCode(models.Model):
     invoice_at_gttl = models.IntegerField(verbose_name="税込請求額", default=0)
     invoice_tax_flag = models.BooleanField(verbose_name="有税無税", default=True)
     invoice_slug = models.CharField(verbose_name="請求書番号", max_length=30, blank=True, null=True)
-    
+    sent_at = models.DateTimeField(verbose_name="送信日時", blank=True, null=True)
+
     def __str__(self):
         mmdate = self.account_item.invoice_date.strftime('%Y%m')
         return f"{self.account_item}-{mmdate}"

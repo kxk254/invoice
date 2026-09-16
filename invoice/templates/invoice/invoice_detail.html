@@ -4,7 +4,7 @@
 <style>
     @page {
         size: A4;
-        margin: 1.6cm 1.8cm;
+        margin: 1.8cm 1.9cm 2.2cm 1.9cm;
     }
 
     * {
@@ -13,7 +13,7 @@
 
     body {
         font-family: "IPAGothic", "Noto Sans JP", sans-serif;
-        font-size: 12.5px;
+        font-size: 11.5px;
         color: #1a1a1a;
         margin: 0;
     }
@@ -21,47 +21,52 @@
     .header {
         display: flex;
         justify-content: space-between;
-        align-items: flex-start;
-        border-bottom: 3px solid #1d63a7;
-        padding-bottom: 10px;
-        margin-bottom: 18px;
-    }
-
-    .header img.logo {
-        width: 5.5cm;
-        height: auto;
+        align-items: flex-end;
+        border-bottom: 1.5px solid #333363;
+        padding-bottom: 12px;
+        margin-bottom: 22px;
     }
 
     .header .title-block {
-        text-align: right;
+        text-align: left;
+    }
+
+    .header .title-block .eyebrow {
+        font-family: "Liberation Serif", "DejaVu Serif", serif;
+        font-size: 11px;
+        letter-spacing: 5px;
+        color: #6b6b85;
+        margin-bottom: 2px;
     }
 
     .header .title-block h1 {
-        margin: 0 0 6px 0;
-        font-size: 28px;
+        margin: 0;
+        font-size: 24px;
         font-weight: 700;
-        color: #1d63a7;
-        letter-spacing: 4px;
+        color: #333363;
+        letter-spacing: 6px;
     }
 
-    .header .title-block .meta {
-        font-size: 11.5px;
-        color: #444;
-        line-height: 1.7;
+    .header .meta {
+        text-align: right;
+        font-size: 10.5px;
+        color: #55555f;
+        line-height: 1.9;
     }
 
     .parties {
         display: flex;
         justify-content: space-between;
         align-items: flex-start;
-        margin-bottom: 16px;
+        margin-bottom: 20px;
     }
 
     .bill-to .name {
-        font-size: 19px;
+        font-size: 18px;
         font-weight: 700;
-        border-bottom: 2px solid #1a1a1a;
-        padding-bottom: 4px;
+        color: #1a1a1a;
+        border-bottom: 1.5px solid #333363;
+        padding-bottom: 5px;
         display: inline-block;
     }
 
@@ -78,78 +83,87 @@
     }
 
     .issuer .reg-no {
-        font-size: 10.5px;
-        color: #555;
-        margin-bottom: 2px;
+        font-size: 10px;
+        letter-spacing: 0.5px;
+        color: #6b6b75;
+        margin-bottom: 3px;
         white-space: nowrap;
     }
 
     .issuer .company-name {
-        font-size: 15px;
+        font-family: "Liberation Serif", "DejaVu Serif", serif;
+        font-size: 14.5px;
         font-weight: 700;
-        margin-bottom: 4px;
+        color: #333363;
+        margin-bottom: 5px;
         white-space: nowrap;
     }
 
     .issuer .address-lines {
-        font-size: 11px;
-        color: #333;
-        line-height: 1.6;
+        font-size: 10.5px;
+        color: #444450;
+        line-height: 1.65;
     }
 
     .issuer .stamp {
-        width: 2.1cm;
+        width: 21mm;
         height: auto;
         flex-shrink: 0;
+        opacity: 0.5;
+        margin-left: -9mm;
     }
 
     .summary {
         display: flex;
         justify-content: space-between;
         gap: 16px;
-        margin-bottom: 20px;
+        margin-bottom: 22px;
     }
 
     .total-card {
         flex: 1;
-        background: #1d63a7;
-        color: #ffffff;
-        border-radius: 6px;
-        padding: 14px 18px;
+        background: #ffffff;
+        border: 1px solid #d8d8e2;
+        border-left: 3px solid #333363;
+        border-radius: 2px;
+        padding: 13px 18px;
     }
 
     .total-card .label {
-        font-size: 11px;
-        letter-spacing: 1px;
-        opacity: 0.85;
+        font-size: 10px;
+        letter-spacing: 2px;
+        color: #6b6b75;
     }
 
     .total-card .amount {
-        font-size: 26px;
+        font-size: 25px;
         font-weight: 700;
-        margin: 4px 0 8px 0;
+        color: #333363;
+        margin: 5px 0 9px 0;
     }
 
     .total-card .due {
-        font-size: 11.5px;
-        border-top: 1px solid rgba(255, 255, 255, 0.35);
-        padding-top: 6px;
+        font-size: 11px;
+        color: #444450;
+        border-top: 1px solid #e2e2ea;
+        padding-top: 7px;
     }
 
     .bank-card {
         flex: 1;
-        background: #eaf2fa;
-        border-radius: 6px;
+        background: #f6f6f9;
+        border-radius: 2px;
         padding: 12px 16px;
-        font-size: 11.5px;
+        font-size: 11px;
+        color: #33333d;
         line-height: 1.75;
     }
 
     .bank-card .label {
-        text-decoration: underline;
         font-weight: 700;
-        color: #1d63a7;
-        margin-bottom: 4px;
+        color: #333363;
+        letter-spacing: 0.5px;
+        margin-bottom: 5px;
         display: block;
     }
 
@@ -160,12 +174,14 @@
     }
 
     table.items thead th {
-        background: #1d63a7;
-        color: #ffffff;
-        font-size: 11px;
+        background: #ffffff;
+        color: #333363;
+        font-size: 10.5px;
         font-weight: 700;
+        letter-spacing: 1px;
         text-align: left;
-        padding: 7px 8px;
+        padding: 8px 8px;
+        border-bottom: 2px solid #333363;
     }
 
     table.items thead th.num {
@@ -173,13 +189,13 @@
     }
 
     table.items tbody td {
-        padding: 7px 8px;
-        border-bottom: 1px solid #e2e8f0;
+        padding: 8px 8px;
+        border-bottom: 1px solid #e6e6ec;
         vertical-align: top;
     }
 
-    table.items tbody tr:nth-child(even) {
-        background: #f8fafc;
+    table.items tbody tr:nth-child(even) td {
+        background: #eaf1fb;
     }
 
     table.items tbody td.num {
@@ -187,18 +203,18 @@
         white-space: nowrap;
     }
 
-    table.items .item-note {
-        display: block;
-        font-size: 10px;
-        color: #666;
-        margin-top: 2px;
+    table.items tbody td.note {
+        font-size: 9.5px;
+        color: #444450;
+        line-height: 1.5;
     }
 
     table.items tfoot td {
-        border-top: 2px solid #1a1a1a;
-        border-bottom: 2px solid #1a1a1a;
-        padding: 8px;
+        border-top: 1.5px solid #333363;
+        border-bottom: 3px double #333363;
+        padding: 9px 8px;
         font-weight: 700;
+        color: #1a1a1a;
     }
 
     table.items tfoot td.num {
@@ -208,59 +224,65 @@
     .tax-breakdown {
         display: flex;
         justify-content: flex-end;
-        margin-top: 18px;
+        margin-top: 20px;
     }
 
     .tax-breakdown-inner {
-        display: flex;
-        align-items: flex-start;
-        gap: 8px;
+        width: 10.5cm;
     }
 
     .tax-breakdown-inner > span {
-        font-size: 11.5px;
+        display: block;
+        font-size: 10.5px;
+        color: #55555f;
         white-space: nowrap;
-        padding-top: 6px;
+        margin-bottom: 6px;
     }
 
     table.tax {
         border-collapse: collapse;
-        font-size: 11px;
-        width: 9cm;
+        font-size: 10.5px;
+        width: 100%;
     }
 
     table.tax th {
-        background: #eaf2fa;
-        color: #1d63a7;
-        border: 1px solid #cddceb;
+        background: #f6f6f9;
+        color: #333363;
+        border: 1px solid #d8d8e2;
         padding: 5px 8px;
         text-align: right;
+        font-weight: 700;
     }
 
     table.tax td {
-        border: 1px solid #cddceb;
+        border: 1px solid #d8d8e2;
         padding: 5px 8px;
         text-align: right;
     }
 
+    table.tax tr:nth-child(even) td {
+        background: #eaf1fb;
+    }
+
     .footnotes {
-        margin-top: 16px;
-        font-size: 10px;
-        color: #777;
+        margin-top: 18px;
+        font-size: 9.5px;
+        color: #77777f;
         line-height: 1.7;
     }
+
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="header">
-    <img class="logo" src="{% static 'images/SOL_head.png' %}" alt="logo">
     <div class="title-block">
+        <div class="eyebrow">I N V O I C E</div>
         <h1>請求書</h1>
-        <div class="meta">
-            請求書番号　{{ invoice_num|format_id }}<br>
-            請求書発行日　{{ today|japan_day_format }}
-        </div>
+    </div>
+    <div class="meta">
+        請求書番号　{{ invoice_num|format_id }}<br>
+        請求書発行日　{{ today|japan_day_format }}
     </div>
 </div>
 
@@ -300,9 +322,18 @@
 </div>
 
 <table class="items">
+    <colgroup>
+        <col style="width: 17%">
+        <col style="width: 17%">
+        <col style="width: 31%">
+        <col style="width: 10%">
+        <col style="width: 25%">
+    </colgroup>
     <thead>
         <tr>
-            <th>請求明細</th>
+            <th>品目</th>
+            <th>対象月</th>
+            <th>内容・摘要</th>
             <th class="num">税率</th>
             <th class="num">金額（円）</th>
         </tr>
@@ -310,20 +341,21 @@
     <tbody>
         {% for record in object %}
         <tr>
-            <td>
-                {{ record.action_name }}
-                <span class="item-note">{{ record.action_date|japan_month_format }}　{{ record.action_note|caseclean }}</span>
-            </td>
-            <td class="num">{{ record.item_code.tax_rate }}</td>
+            <td>{{ record.action_name }}</td>
+            <td>{{ record.action_date|japan_month_format }}</td>
+            <td class="note">{{ record.action_note|caseclean }}</td>
+            <td class="num">{% if record.tax_rate == 0 %}無税{% else %}{{ record.tax_rate }}%{% endif %}</td>
             <td class="num">{{ record.invoice_bt|format_with_000s }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="3">明細がありません。</td></tr>
+        <tr><td colspan="5">明細がありません。</td></tr>
         {% endfor %}
     </tbody>
     <tfoot>
         <tr>
             <td>合計</td>
+            <td></td>
+            <td></td>
             <td></td>
             <td class="num">{{ total_bt_gttl|format_with_000s }}</td>
         </tr>
@@ -340,22 +372,14 @@
                 <th>消費税額（円）</th>
                 <th>合計（円）</th>
             </tr>
-            {% if total_bt_gttl_0 > 0 %}
+            {% for row in tax_breakdown_rows %}
             <tr>
-                <td>無税</td>
-                <td>{{ total_bt_gttl_0|format_with_000s }}</td>
-                <td>0</td>
-                <td>{{ total_bt_gttl_0|format_with_000s }}</td>
+                <td>{% if row.rate == 0 %}無税{% else %}{{ row.rate }}%{% endif %}</td>
+                <td>{{ row.base|format_with_000s }}</td>
+                <td>{{ row.tax|format_with_000s }}</td>
+                <td>{{ row.total|format_with_000s }}</td>
             </tr>
-            {% endif %}
-            {% if total_tax > 0 %}
-            <tr>
-                <td>10%</td>
-                <td>{{ total_amount_bt|format_with_000s }}</td>
-                <td>{{ total_tax|format_with_000s }}</td>
-                <td>{{ total_amount_at|format_with_000s }}</td>
-            </tr>
-            {% endif %}
+            {% endfor %}
         </table>
     </div>
 </div>

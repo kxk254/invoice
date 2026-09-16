@@ -93,27 +93,21 @@ def total_amount_calc(organization):
         sort_revenues = revenues.filter(slug=invoice.account_item_slug)
 
         """COMPLY WITH LAWS"""
-        # there are few queries in temp_mens.  Without iterating each, would like to sum all up
-        # total_before_tax = temp_mems.aggregate(Sum('invoice_bt'))['invoice_bt__sum'] or 0
-        # total_after_tax = temp_mems.aggregate(Sum('invoice_at'))['invoice_at__sum'] or 0
-        # total_tax = temp_mems.aggregate(Sum('invoice_tax'))['invoice_tax__sum'] or 0
-
-        # there are few queries in temp_mens.  Without iterating each, would like to sum all up
-        before_zero_tax = 0
-        before_tax = 0
-        tax_amt = 0
-        total_aft_tax = 0
-        grand_total = 0
+        # Japan's qualified-invoice rules require consumption tax to be
+        # rounded down exactly once per tax rate per invoice (on the summed
+        # base for that rate), not once per line item, so bases are grouped
+        # by rate first and tax is computed on each group's sum.
+        rate_bases = {}
         for sr in sort_revenues:
-            if sr.item_code_id == 3:
-                before_zero_tax += sr.invoice_bt
-            else:
-                before_tax += sr.invoice_bt
-        
-        tax_amt = math.floor(before_tax * 0.1)
+            rate_bases[sr.tax_rate] = rate_bases.get(sr.tax_rate, 0) + sr.invoice_bt
+
+        before_zero_tax = rate_bases.pop(0, 0)
+        before_tax = sum(rate_bases.values())
+        tax_amt = sum(math.floor(base * rate / 100) for rate, base in rate_bases.items())
+
         total_aft_tax = before_tax + tax_amt
         grand_total = before_zero_tax + total_aft_tax
-        
+
 
         invoice.invoice_bt_ttl_0 = before_zero_tax
         invoice.invoice_bt_ttl = before_tax
@@ -187,16 +181,15 @@ def tax_calc_def(organization, selected_company, selected_month):
         print("BEFORE QUERY SET TAX", queryset.query)
         for query in queryset:
             print("QUERY", query)
-            if query.item_code.slug == 'NT':
-                continue
-            elif query.invoice_at == 0:
-                query.invoice_tax = int(query.invoice_bt*0.1)
+            rate = query.tax_rate / 100
+            if query.invoice_at == 0:
+                query.invoice_tax = int(query.invoice_bt * rate)
                 print("請求消費税 ", query.invoice_tax)
                 query.invoice_at = query.invoice_bt + query.invoice_tax
                 print("請求金額 SEIKYU KINGAKU", query.invoice_bt)
                 query.save()
             elif query.invoice_bt == 0:
-                query.invoice_tax = int(query.invoice_at*(1-1/1.1))
+                query.invoice_tax = int(query.invoice_at * (1 - 1 / (1 + rate)))
                 print("請求消費税 ", query.invoice_tax)
                 query.invoice_bt = query.invoice_at - query.invoice_tax
                 print("請求金額 SEIKYU KINGAKU", query.invoice_bt)
@@ -222,9 +215,22 @@ def prepare_invoice_items(organization, slug, interactive=False):
     act_date = datetime.strptime(str(invoicecode.account_item.action_date), "%Y-%m-%d")
     accountitem = AccountItem.objects.filter(slug=slug['slug'], organization=organization).order_by('-invoice_date', 'item_code')
     # print("accountitem 5000  print", accountitem)
+
+    # 税率毎の明細：実際に使われている税率ごとに動的に集計（0%/8%/10%等が混在しても対応）
+    # 消費税額は税率区分ごとに合計した金額に対して一度だけ端数処理する（明細行ごとの
+    # 端数処理は法令上認められないため）。
+    rate_bases = {}
+    for record in accountitem:
+        rate_bases[record.tax_rate] = rate_bases.get(record.tax_rate, 0) + record.invoice_bt
+    tax_breakdown_rows = [
+        {'rate': rate, 'base': base, 'tax': (tax := math.floor(base * rate / 100)), 'total': base + tax}
+        for rate, base in sorted(rate_bases.items())
+    ]
+
     # 請求書のアイテム毎金額を取得
     context['slug'] = slug
     context['object'] = accountitem
+    context['tax_breakdown_rows'] = tax_breakdown_rows
     # 物件番号、レポート日、部屋番号、請求書番号を取得
     context['selected_company'] = invoicecode.account_item.company.name
     context['selected_month'] = month_ym
@@ -272,6 +278,7 @@ def prepare_invoice_items(organization, slug, interactive=False):
     template_name = 'invoice/invoice_detail.html'
     context['html_content'] = render_to_string(template_name, {
         'object': context['object'],
+        'tax_breakdown_rows': tax_breakdown_rows,
         'context': context,
         'today': datetime.today(),
         'slug': slug,

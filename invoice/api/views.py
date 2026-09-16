@@ -1,5 +1,7 @@
+from django.db import transaction
 from django.db.models import Q
 from django.http import HttpResponse
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -42,9 +44,129 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
         if company:
             qs = qs.filter(company_id=company)
         if month:
+            # "month" here means 該当月 (the month the line item's work/expense
+            # relates to), matching export_csv below and how line items are
+            # actually entered/edited on a monthly basis — not 請求日
+            # (invoice_date), which by default is a month ahead of action_date
+            # and would silently show the wrong month's rows.
             _, start_month, end_of_month = strip_date(month)
-            qs = qs.filter(invoice_date__gte=start_month, invoice_date__lte=end_of_month)
+            qs = qs.filter(action_date__gte=start_month, action_date__lte=end_of_month)
         return qs
+
+    @action(detail=False, methods=["post"], url_path="bulk-update")
+    def bulk_update(self, request):
+        """
+        Saves a month's worth of edited line items in one request instead of
+        one PATCH per row. Body: {"items": [{"id": <id>, ...fields}, ...]}.
+        All rows are validated before anything is written, so a mistake in
+        one row never leaves the others half-saved.
+        """
+        rows = request.data.get("items")
+        if not isinstance(rows, list):
+            return Response({"detail": "items must be a list."}, status=status.HTTP_400_BAD_REQUEST)
+
+        qs = self.get_queryset()
+        to_save = []
+        errors = []
+        for index, row in enumerate(rows):
+            item_id = row.get("id")
+            instance = qs.filter(pk=item_id).first()
+            if instance is None:
+                errors.append({"index": index, "id": item_id, "detail": "not found"})
+                continue
+            serializer = AccountItemSerializer(instance, data=row, partial=True, context={"request": request})
+            if not serializer.is_valid():
+                errors.append({"index": index, "id": item_id, "detail": serializer.errors})
+                continue
+            to_save.append(serializer)
+
+        if errors:
+            return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            for serializer in to_save:
+                serializer.save()
+
+        return Response({"updated": len(to_save)})
+
+    @action(detail=False, methods=["post"], url_path="diff-import")
+    def diff_import(self, request):
+        """
+        Read-only sanity check for a backup/export file: for each row, look
+        up the existing AccountItem by `slug` and report whether it's
+        missing from the database, differs from it, or matches exactly.
+        Never creates, updates, or deletes anything. Accepts the same
+        shapes as ImportView (flat objects, or dumpdata-style
+        {"fields": {...}} rows).
+        """
+        rows = request.data.get("account_items")
+        if not isinstance(rows, list):
+            return Response({"detail": "account_items must be a list."}, status=status.HTTP_400_BAD_REQUEST)
+
+        clients = Client.objects.filter(organization=request.organization)
+        item_codes = ItemCode.objects.filter(organization=request.organization)
+        qs = self.get_queryset()
+
+        compare_fields = [
+            "invoice_date", "payment_due", "action_date", "action_name",
+            "action_note", "invoice_bt", "invoice_tax", "invoice_at",
+            "tax_rate", "flag",
+        ]
+
+        missing = []
+        differing = []
+        errors = []
+        matched = 0
+
+        for index, row in enumerate(rows):
+            row = dict(row)
+            if isinstance(row.get("fields"), dict):
+                row = dict(row["fields"])
+
+            slug = row.get("slug")
+            if not slug:
+                errors.append({"index": index, "detail": "row has no slug to match on"})
+                continue
+
+            instance = qs.filter(slug=slug).first()
+            if instance is None:
+                missing.append({"index": index, "slug": slug})
+                continue
+
+            diffs = {}
+            for field in compare_fields:
+                if field not in row:
+                    continue
+                file_value = row[field]
+                db_value = getattr(instance, field)
+                if hasattr(db_value, "isoformat"):
+                    db_value = db_value.isoformat()
+                if file_value != db_value:
+                    diffs[field] = {"file": file_value, "db": db_value}
+
+            for ref_field, ref_queryset in (("company", clients), ("item_code", item_codes)):
+                if ref_field not in row:
+                    continue
+                try:
+                    resolved = _resolve_ref(ref_queryset, row[ref_field])
+                except (ValueError, TypeError):
+                    resolved = None
+                db_value = getattr(instance, f"{ref_field}_id")
+                if resolved != db_value:
+                    diffs[ref_field] = {"file": row[ref_field], "db": db_value}
+
+            if diffs:
+                differing.append({"index": index, "slug": slug, "diffs": diffs})
+            else:
+                matched += 1
+
+        return Response({
+            "total": len(rows),
+            "matched": matched,
+            "missing": missing,
+            "differing": differing,
+            "errors": errors,
+        })
 
     @action(detail=False, methods=["get"], url_path="export-csv")
     def export_csv(self, request):
@@ -112,6 +234,20 @@ class InvoiceCodeViewSet(OrganizationScopedMixin, viewsets.ReadOnlyModelViewSet)
         calc.tax_calc_def(request.organization, company, month)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+    @action(detail=True, methods=["post"], url_path="mark-sent")
+    def mark_sent(self, request, pk=None):
+        invoice = self.get_object()
+        invoice.sent_at = timezone.now()
+        invoice.save(update_fields=["sent_at"])
+        return Response(self.get_serializer(invoice).data)
+
+    @action(detail=True, methods=["post"], url_path="unmark-sent")
+    def unmark_sent(self, request, pk=None):
+        invoice = self.get_object()
+        invoice.sent_at = None
+        invoice.save(update_fields=["sent_at"])
+        return Response(self.get_serializer(invoice).data)
+
 
 def _resolve_ref(queryset, value):
     """Resolve an account-item's `company`/`item_code` reference, which can
@@ -153,11 +289,25 @@ class ImportView(APIView):
         for index, row in enumerate(rows):
             try:
                 row = dict(row)
+                # Also accept Django `dumpdata`-style fixture rows
+                # ({"model": "invoice.accountitem", "pk": ..., "fields":
+                # {...}}), since that's what a database backup/export looks
+                # like and people restoring old data reach for it naturally.
+                if isinstance(row.get("fields"), dict):
+                    row = dict(row["fields"])
                 row["company"] = _resolve_ref(clients, row.get("company"))
                 row["item_code"] = _resolve_ref(item_codes, row.get("item_code"))
             except (ValueError, TypeError) as e:
                 errors.append({"index": index, "detail": str(e)})
                 continue
+
+            # Rows imported against the 無税 (NT) item code without an
+            # explicit tax_rate should land as tax-exempt, not the model's
+            # 10% default.
+            if not row.get("tax_rate"):
+                item_code = item_codes.filter(pk=row["item_code"]).first()
+                if item_code is not None and item_code.slug == "NT":
+                    row["tax_rate"] = 0
 
             serializer = AccountItemSerializer(data=row, context={"request": request})
             if serializer.is_valid():

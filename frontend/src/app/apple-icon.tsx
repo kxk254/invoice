@@ -11,24 +11,25 @@ export default function AppleIcon() {
           width: "100%",
           height: "100%",
           display: "flex",
-          background: "#0f172a",
+          background: "#333363",
           overflow: "hidden",
         }}
       >
         <svg width="180" height="180" viewBox="0 0 32 32">
-          <rect x={4} y={3} width={16} height={24} rx={2.5} fill="#ffffff" />
-          <path d="M15 3 L20 3 L20 8 Z" fill="#94a3b8" />
-          <rect x={7.5} y={12} width={10} height={2.6} rx={1.3} fill="#334155" />
-          <rect x={7.5} y={18} width={7} height={2.6} rx={1.3} fill="#334155" />
-          <circle cx={25} cy={26} r={9} fill="#10b981" stroke="#0f172a" strokeWidth={2.5} />
+          {/* 請求書 (receipt/invoice paper) */}
+          <rect x={7} y={4} width={18} height={24} rx={2} fill="#ffffff" />
+          <path d="M20 4 L25 4 L25 9 Z" fill="#b9c0d4" />
+          {/* Yen mark */}
           <path
-            d="M20.7 26.3 L23.7 29.3 L29.6 22.4"
+            d="M11 8 L16 15 M21 8 L16 15 M16 15 L16 24 M11.5 18 L20.5 18 M11.5 21 L20.5 21"
             fill="none"
-            stroke="#ffffff"
-            strokeWidth={3.4}
+            stroke="#333363"
+            strokeWidth={2.3}
             strokeLinecap="round"
             strokeLinejoin="round"
           />
+          {/* Hanko seal stamp accent */}
+          <circle cx={26} cy={26} r={5} fill="#d1382c" stroke="#333363" strokeWidth={1.6} />
         </svg>
       </div>
     ),

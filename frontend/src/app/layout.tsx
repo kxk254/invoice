@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Invoice",
-  description: "Invoice management",
+  title: "請求書システム",
+  description: "月次請求書の作成・管理システム",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

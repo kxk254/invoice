@@ -2,13 +2,19 @@ import { apiGet } from "@/lib/api";
 import type { Client, InvoiceCode, Me } from "@/lib/types";
 import Nav from "@/components/Nav";
 import FilterForm from "./FilterForm";
-import { runTaxCalc } from "./actions";
+import { runTaxCalc, markInvoiceSent, unmarkInvoiceSent } from "./actions";
+
+// This page's list depends entirely on the `month`/`company` query string;
+// without this, some browsers/proxies can serve a cached response for the
+// route and appear to ignore the filter even though the URL changed.
+export const dynamic = "force-dynamic";
 
 function monthStart(month: string) {
   return `${month}-01`;
 }
 
 const yen = new Intl.NumberFormat("ja-JP");
+const dateFmt = new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium" });
 
 export default async function InvoicesPage(props: PageProps<"/invoices">) {
   const params = await props.searchParams;
@@ -61,6 +67,61 @@ export default async function InvoicesPage(props: PageProps<"/invoices">) {
           Export CSV
         </button>
       </form>
+
+      {month && (
+        <div className="mb-6 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs font-medium text-slate-500">
+                <th className="p-2">Client</th>
+                <th className="p-2">Invoice no.</th>
+                <th className="p-2">Payment due</th>
+                <th className="p-2 text-right">Total (incl. tax)</th>
+                <th className="p-2">Status</th>
+                <th className="p-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {invoices.map((invoice) => {
+                const markSentWithId = markInvoiceSent.bind(null, invoice.id);
+                const unmarkSentWithId = unmarkInvoiceSent.bind(null, invoice.id);
+                return (
+                  <tr key={invoice.id} className="border-b border-slate-100 last:border-0">
+                    <td className="p-2 text-slate-900">{invoice.client_name}</td>
+                    <td className="p-2 text-slate-500">{invoice.invoice_slug ?? invoice.account_item_slug}</td>
+                    <td className="p-2 text-slate-500">{invoice.payment_due ?? "—"}</td>
+                    <td className="p-2 text-right font-medium text-slate-900">¥{yen.format(invoice.invoice_at_gttl)}</td>
+                    <td className="p-2">
+                      {invoice.sent_at ? (
+                        <span className="text-emerald-700">送信済み（{dateFmt.format(new Date(invoice.sent_at))}）</span>
+                      ) : (
+                        <span className="text-slate-400">未送信</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap p-2 text-right">
+                      <form action={invoice.sent_at ? unmarkSentWithId : markSentWithId} className="inline">
+                        <button
+                          type="submit"
+                          className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          {invoice.sent_at ? "未送信に戻す" : "送信済みにする"}
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                );
+              })}
+              {invoices.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="p-4 text-center text-sm text-slate-400">
+                    No invoices for this filter.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="space-y-4">
         {invoices.map((invoice) => (

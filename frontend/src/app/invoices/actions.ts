@@ -12,3 +12,13 @@ export async function runTaxCalc(formData: FormData) {
   });
   revalidatePath("/invoices");
 }
+
+export async function markInvoiceSent(id: number) {
+  await apiMutate(`/invoices/${id}/mark-sent/`, "POST");
+  revalidatePath("/invoices");
+}
+
+export async function unmarkInvoiceSent(id: number) {
+  await apiMutate(`/invoices/${id}/unmark-sent/`, "POST");
+  revalidatePath("/invoices");
+}

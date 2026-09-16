@@ -32,6 +32,7 @@ export type AccountItem = {
   action_date: string | null;
   action_name: string | null;
   action_note: string | null;
+  tax_rate: number;
   invoice_bt: number;
   invoice_tax: number;
   invoice_at: number;
@@ -53,5 +54,6 @@ export type InvoiceCode = {
   invoice_bt_gttl: number;
   invoice_at_gttl: number;
   invoice_tax_flag: boolean;
+  sent_at: string | null;
   items: AccountItem[];
 };
