@@ -41,7 +41,7 @@ export function FieldInputs({
           ))}
         </select>
       </td>
-      <td className={`sticky left-28 z-10 border-b border-r border-b-slate-100 border-r-slate-200 p-1 ${stickyBg}`}>
+      <td className={`sticky left-40 z-10 border-b border-r border-b-slate-100 border-r-slate-200 p-1 ${stickyBg}`}>
         <select name={n("item_code")} defaultValue={defaults?.item_code ?? ""} className={`${inputClass} w-full`}>
           <option value="" disabled>
             —

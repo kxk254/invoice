@@ -2,6 +2,7 @@ import { apiGet } from "@/lib/api";
 import type { Client, InvoiceCode, Me } from "@/lib/types";
 import Nav from "@/components/Nav";
 import FilterForm from "./FilterForm";
+import ExportCsvForm from "./ExportCsvForm";
 import { runTaxCalc, markInvoiceSent, unmarkInvoiceSent } from "./actions";
 
 // This page's list depends entirely on the `month`/`company` query string;
@@ -11,6 +12,12 @@ export const dynamic = "force-dynamic";
 
 function monthStart(month: string) {
   return `${month}-01`;
+}
+
+function monthEnd(month: string) {
+  const [year, mon] = month.split("-").map(Number);
+  // Day 0 of the following month is the last day of this one.
+  return new Date(year, mon, 0).toISOString().slice(0, 10);
 }
 
 const yen = new Intl.NumberFormat("ja-JP");
@@ -54,19 +61,10 @@ export default async function InvoicesPage(props: PageProps<"/invoices">) {
         </form>
       </div>
 
-      <form action="/export-csv" method="get" className="mb-6 flex flex-wrap items-end gap-4 rounded-lg border border-slate-200 bg-white p-4">
-        <div>
-          <label className="block text-xs font-medium text-slate-500">Export CSV: from</label>
-          <input type="date" name="start" required defaultValue={month ? monthStart(month) : ""} className="mt-1 rounded border border-slate-300 px-2 py-1 text-sm" />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-500">to</label>
-          <input type="date" name="end" required className="mt-1 rounded border border-slate-300 px-2 py-1 text-sm" />
-        </div>
-        <button type="submit" className="rounded border border-slate-300 px-4 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
-          Export CSV
-        </button>
-      </form>
+      <ExportCsvForm
+        defaultStart={month ? monthStart(month) : ""}
+        defaultEnd={month ? monthEnd(month) : ""}
+      />
 
       {month && (
         <div className="mb-6 overflow-x-auto rounded-lg border border-slate-200 bg-white">

@@ -442,5 +442,5 @@ def export_to_csv(queryset, st, ed):
             ])
 
         response = HttpResponse(buffer.getvalue().encode('utf_8_sig'), content_type='text/csv')
-        response['Content-Disposition'] = f"attachment; filename = {st}-{ed}-Invoice_list.csv"
+        response['Content-Disposition'] = f'attachment; filename="{st}-{ed}-Invoice_list.csv"'
         return response
