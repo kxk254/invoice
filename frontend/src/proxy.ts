@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ACCESS_TOKEN_MAX_AGE, REFRESH_TOKEN_MAX_AGE } from "./lib/auth-cookies";
 
 const API_URL = process.env.DJANGO_API_URL ?? "http://localhost:8000/api/v1";
 const PUBLIC_PATHS = ["/login"];
@@ -36,7 +37,7 @@ export async function proxy(request: NextRequest) {
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
         path: "/",
-        maxAge: 60 * 30,
+        maxAge: ACCESS_TOKEN_MAX_AGE,
       });
       if (data.refresh) {
         response.cookies.set("refresh_token", data.refresh, {
@@ -44,7 +45,7 @@ export async function proxy(request: NextRequest) {
           secure: process.env.NODE_ENV === "production",
           sameSite: "lax",
           path: "/",
-          maxAge: 60 * 60 * 24 * 7,
+          maxAge: REFRESH_TOKEN_MAX_AGE,
         });
       }
       return response;

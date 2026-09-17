@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { previewRestore, applyRestore } from "./actions";
 
 const LABELS: Record<string, string> = {
@@ -15,10 +15,31 @@ export default function RestoreForm() {
   const [previewState, previewAction, previewPending] = useActionState(previewRestore, undefined);
   const [applyState, applyAction, applyPending] = useActionState(applyRestore, undefined);
   const [understood, setUnderstood] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Buttons stay on the officially-supported formAction path (so
+  // previewPending/applyPending track correctly — calling the useActionState
+  // dispatcher manually, even inside startTransition, doesn't reliably keep
+  // it inside a transition across the action's own await). The side effect
+  // of a real formAction submission is that once it resolves, React resets
+  // every uncontrolled field in the <form>, which clears this <input
+  // type="file"> (and its 選択 label). So instead we keep the picked File in
+  // state and, right after each action settles, hand it back to the input
+  // via a DataTransfer — the input's own value is the only thing formData
+  // reads from at the next submission, and this is the only supported way
+  // to set it programmatically.
+  useEffect(() => {
+    if (file && fileInputRef.current && fileInputRef.current.files?.length === 0) {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      fileInputRef.current.files = dt.files;
+    }
+  }, [file, previewState, applyState]);
 
   const hasPreview = previewState && "diff" in previewState;
   const hasConflicts = hasPreview && previewState.conflicts.length > 0;
-  const canApply = hasPreview && !hasConflicts && understood;
+  const canApply = hasPreview && !hasConflicts && understood && file;
 
   return (
     <form className="flex flex-col gap-4">
@@ -27,6 +48,8 @@ export default function RestoreForm() {
         name="file"
         accept="application/json,.json"
         required
+        ref={fileInputRef}
+        onChange={(e) => setFile(e.target.files?.[0] ?? null)}
         className="text-sm file:mr-3 file:rounded file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white"
       />
 
@@ -34,7 +57,7 @@ export default function RestoreForm() {
         <button
           type="submit"
           formAction={previewAction}
-          disabled={previewPending || applyPending}
+          disabled={!file || previewPending || applyPending}
           className="w-fit rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
         >
           {previewPending ? "Checking..." : "Preview restore"}

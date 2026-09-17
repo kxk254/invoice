@@ -285,7 +285,22 @@ class ImportView(APIView):
     surviving line item. A bad row anywhere aborts the whole replace before
     anything is written, so a period's invoiced items are never deleted
     without a full replacement landing in the same request.
+
+    Rows that exactly match an already-existing line item (same company,
+    item code, dates, description, and amount) are skipped rather than
+    inserted again, in "create" mode - re-uploading the same export, or a
+    request that silently retried and actually landed twice (the cause of
+    a real incident: see the "data triplication" fix commit), used to
+    double every affected period's total instead of being a no-op. A row is
+    also skipped if it duplicates an earlier row within the same request.
+    Skipped rows are reported under "skipped_duplicates", never silently
+    dropped.
     """
+
+    # What counts as "the same line item" for duplicate detection. Deliberately
+    # excludes invoice_tax/invoice_at (derived from invoice_bt + tax_rate) and
+    # payment_due/flag/slug (bookkeeping, not part of what a human entered).
+    DUPLICATE_FIELDS = ["company", "item_code", "invoice_date", "action_date", "action_name", "action_note", "invoice_bt", "tax_rate"]
 
     def post(self, request):
         organization = get_active_organization(request.user)
@@ -299,8 +314,16 @@ class ImportView(APIView):
         clients = Client.objects.filter(organization=organization)
         item_codes = ItemCode.objects.filter(organization=organization)
 
+        existing_keys = set()
+        if mode == "create":
+            existing_keys = set(
+                AccountItem.objects.filter(organization=organization).values_list(*self.DUPLICATE_FIELDS)
+            )
+        seen_keys = set()
+
         prepared = []
         errors = []
+        duplicates = []
         for index, row in enumerate(rows):
             try:
                 row = dict(row)
@@ -333,6 +356,19 @@ class ImportView(APIView):
                 errors.append({"index": index, "detail": "invoice_date is required to replace a period."})
                 continue
 
+            # company/item_code come from `row` (still plain ids from
+            # _resolve_ref above), not validated_data - DRF's
+            # PrimaryKeyRelatedField turns those into model instances there,
+            # which would never equal the plain ids `existing_keys` holds.
+            key = tuple(
+                row[f] if f in ("company", "item_code") else serializer.validated_data.get(f)
+                for f in self.DUPLICATE_FIELDS
+            )
+            if key in existing_keys or key in seen_keys:
+                duplicates.append({"index": index, "slug": row.get("slug"), "detail": "matches an existing line item; skipped"})
+                continue
+            seen_keys.add(key)
+
             prepared.append((row["company"], serializer))
 
         if errors and mode == "replace":
@@ -341,7 +377,7 @@ class ImportView(APIView):
             # as a successful call, just with created=0), not an HTTP-level
             # failure. Returning 400 here made apiMutate() throw and show a
             # raw, unparsed error blob instead of the usual error list.
-            return Response({"created": 0, "replaced_periods": [], "errors": errors})
+            return Response({"created": 0, "replaced_periods": [], "errors": errors, "skipped_duplicates": duplicates})
 
         created = 0
         replaced_periods = []
@@ -398,7 +434,10 @@ class ImportView(APIView):
             calc.invoice_code_slug_save(organization)
             calc.total_amount_calc(organization)
 
-        return Response({"created": created, "replaced_periods": replaced_periods, "errors": errors}, status=status.HTTP_200_OK)
+        return Response(
+            {"created": created, "replaced_periods": replaced_periods, "errors": errors, "skipped_duplicates": duplicates},
+            status=status.HTTP_200_OK,
+        )
 
 
 class InvoicePdfView(APIView):

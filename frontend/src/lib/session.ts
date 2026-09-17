@@ -1,5 +1,6 @@
 import "server-only";
 import { cookies } from "next/headers";
+import { ACCESS_TOKEN_MAX_AGE, REFRESH_TOKEN_MAX_AGE } from "./auth-cookies";
 
 const cookieOpts = {
   httpOnly: true,
@@ -12,9 +13,9 @@ const cookieOpts = {
 // read-only during Server Component render).
 export async function setTokens(access: string, refresh?: string) {
   const store = await cookies();
-  store.set("access_token", access, { ...cookieOpts, maxAge: 60 * 30 });
+  store.set("access_token", access, { ...cookieOpts, maxAge: ACCESS_TOKEN_MAX_AGE });
   if (refresh) {
-    store.set("refresh_token", refresh, { ...cookieOpts, maxAge: 60 * 60 * 24 * 7 });
+    store.set("refresh_token", refresh, { ...cookieOpts, maxAge: REFRESH_TOKEN_MAX_AGE });
   }
 }
 

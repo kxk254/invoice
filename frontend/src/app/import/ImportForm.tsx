@@ -1,12 +1,33 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { importJson, diffImportJson } from "./actions";
 
 export default function ImportForm() {
   const [importState, importAction, importPending] = useActionState(importJson, undefined);
   const [diffState, diffAction, diffPending] = useActionState(diffImportJson, undefined);
   const [replace, setReplace] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Buttons stay on the officially-supported formAction path (so
+  // importPending/diffPending track correctly — calling the useActionState
+  // dispatcher manually, even inside startTransition, doesn't reliably keep
+  // it inside a transition across the action's own await). The side effect
+  // of a real formAction submission is that once it resolves, React resets
+  // every uncontrolled field in the <form>, which clears this <input
+  // type="file"> (and its 選択 label). So instead we keep the picked File in
+  // state and, right after each action settles, hand it back to the input
+  // via a DataTransfer — the input's own value is the only thing formData
+  // reads from at the next submission, and this is the only supported way
+  // to set it programmatically.
+  useEffect(() => {
+    if (file && fileInputRef.current && fileInputRef.current.files?.length === 0) {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      fileInputRef.current.files = dt.files;
+    }
+  }, [file, diffState, importState]);
 
   return (
     <form className="flex flex-col gap-4">
@@ -15,6 +36,8 @@ export default function ImportForm() {
         name="file"
         accept="application/json,.json"
         required
+        ref={fileInputRef}
+        onChange={(e) => setFile(e.target.files?.[0] ?? null)}
         className="text-sm file:mr-3 file:rounded file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white"
       />
 
@@ -41,7 +64,7 @@ export default function ImportForm() {
         <button
           type="submit"
           formAction={diffAction}
-          disabled={importPending || diffPending}
+          disabled={!file || importPending || diffPending}
           className="w-fit rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
         >
           {diffPending ? "Comparing..." : "Compare only (no changes)"}
@@ -49,7 +72,7 @@ export default function ImportForm() {
         <button
           type="submit"
           formAction={importAction}
-          disabled={importPending || diffPending}
+          disabled={!file || importPending || diffPending}
           className="w-fit rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
         >
           {importPending ? "Importing..." : "Import"}
@@ -132,6 +155,18 @@ export default function ImportForm() {
                   <li key={e.index}>
                     Row {e.index}: {JSON.stringify(e.detail)}
                   </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {importState.skipped_duplicates.length > 0 && (
+            <>
+              <p className="mt-2 font-medium text-amber-700">
+                {importState.skipped_duplicates.length} row(s) skipped — already matched an existing line item:
+              </p>
+              <ul className="mt-1 list-disc pl-5 text-slate-600">
+                {importState.skipped_duplicates.map((d) => (
+                  <li key={d.index}>Row {d.index}</li>
                 ))}
               </ul>
             </>

@@ -16,6 +16,12 @@ Two-step by design: `build_restore_plan` + `RestorePlan.diff()` is entirely
 read-only and safe to call as often as you like; `RestorePlan.apply()` is
 the only thing that writes, and refuses to write anything at all if it
 finds a single pk conflicting with another organization's data.
+
+A backup taken before migration 0026 also predates `RenameModel(Company ->
+Client)`, so its rows are still labelled `invoice.company` - `_index_by_model`
+folds those into `invoice.client` so every such backup is handled exactly
+like a same-name one, both here and in the legacy (pre-multitenancy) branch
+of `build_restore_plan`.
 """
 import json
 from dataclasses import dataclass, field
@@ -31,6 +37,12 @@ class RestoreError(Exception):
     pass
 
 
+# Old model name -> current one, for fixtures dumped before a RenameModel
+# migration. Only `Company` has ever been renamed (see 0026); add here if
+# that ever happens again.
+LEGACY_MODEL_ALIASES = {"invoice.company": "invoice.client"}
+
+
 def _fields_for(row):
     return row["fields"]
 
@@ -38,7 +50,8 @@ def _fields_for(row):
 def _index_by_model(fixture_rows):
     by_model = {}
     for row in fixture_rows:
-        by_model.setdefault(row.get("model"), []).append(row)
+        model = LEGACY_MODEL_ALIASES.get(row.get("model"), row.get("model"))
+        by_model.setdefault(model, []).append(row)
     return by_model
 
 

@@ -7,6 +7,7 @@ export type ImportState =
       created: number;
       replaced_periods: { company: number; month: string; removed: number; added: number; invoice_slug: string | null }[];
       errors: { index: number; detail: unknown }[];
+      skipped_duplicates: { index: number; slug: string | null; detail: string }[];
     }
   | { error: string }
   | undefined;
@@ -58,7 +59,12 @@ export async function importJson(_prevState: ImportState, formData: FormData): P
   try {
     const res = await apiMutate("/import/", "POST", { account_items: accountItems, mode });
     const body = await res.json();
-    return { created: body.created, replaced_periods: body.replaced_periods ?? [], errors: body.errors };
+    return {
+      created: body.created,
+      replaced_periods: body.replaced_periods ?? [],
+      errors: body.errors,
+      skipped_duplicates: body.skipped_duplicates ?? [],
+    };
   } catch (e) {
     return { error: e instanceof ApiError ? e.message : "Import failed." };
   }
