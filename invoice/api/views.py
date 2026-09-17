@@ -336,7 +336,12 @@ class ImportView(APIView):
             prepared.append((row["company"], serializer))
 
         if errors and mode == "replace":
-            return Response({"created": 0, "replaced_periods": [], "errors": errors}, status=status.HTTP_400_BAD_REQUEST)
+            # Still a normal 200: this is a fully-formed, structured
+            # response the frontend already knows how to render (same shape
+            # as a successful call, just with created=0), not an HTTP-level
+            # failure. Returning 400 here made apiMutate() throw and show a
+            # raw, unparsed error blob instead of the usual error list.
+            return Response({"created": 0, "replaced_periods": [], "errors": errors})
 
         created = 0
         replaced_periods = []
