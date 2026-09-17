@@ -43,7 +43,7 @@ def set_invoice_code(organization):
                 # Check if the generated 契約書ID already exists in 請求書ID管理
                 if InvoiceCode.objects.filter(account_item_slug=generated_id).exists():
                     print(f"Duplicate detected in InvoiceCode for 契約書ID: {generated_id}. Skipping creation/update in InvoiceCode.")
-                    return generated_id  # Still return the ID for reference
+                    continue  # Only skip this account; other unflagged accounts still need processing
 
                 try:
                     InvoiceCode.objects.create(
