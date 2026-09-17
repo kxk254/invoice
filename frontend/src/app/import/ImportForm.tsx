@@ -1,11 +1,12 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { importJson, diffImportJson } from "./actions";
 
 export default function ImportForm() {
   const [importState, importAction, importPending] = useActionState(importJson, undefined);
   const [diffState, diffAction, diffPending] = useActionState(diffImportJson, undefined);
+  const [replace, setReplace] = useState(false);
 
   return (
     <form className="flex flex-col gap-4">
@@ -16,6 +17,26 @@ export default function ImportForm() {
         required
         className="text-sm file:mr-3 file:rounded file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white"
       />
+
+      <label className="flex items-start gap-2 text-sm text-slate-700">
+        <input
+          type="checkbox"
+          name="mode"
+          value="replace"
+          checked={replace}
+          onChange={(e) => setReplace(e.target.checked)}
+          className="mt-0.5"
+        />
+        <span>
+          Replace existing periods
+          <span className="block text-xs text-slate-500">
+            For each client + invoice month in this file, delete that period&apos;s current line items and load these
+            instead. The invoice number already issued for that period is kept. Unrelated periods are untouched. Off
+            = only add new rows (may duplicate if re-run).
+          </span>
+        </span>
+      </label>
+
       <div className="flex flex-wrap gap-3">
         <button
           type="submit"
@@ -93,6 +114,16 @@ export default function ImportForm() {
       {importState && "created" in importState && (
         <div className="rounded border border-slate-200 bg-slate-50 p-4 text-sm">
           <p className="font-medium text-emerald-700">Created {importState.created} line item(s).</p>
+          {importState.replaced_periods.length > 0 && (
+            <ul className="mt-2 list-disc pl-5 text-slate-600">
+              {importState.replaced_periods.map((p, i) => (
+                <li key={i}>
+                  Client {p.company}, {p.month}: removed {p.removed}, added {p.added}
+                  {p.invoice_slug ? ` (invoice ${p.invoice_slug} unchanged)` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
           {importState.errors.length > 0 && (
             <>
               <p className="mt-2 font-medium text-red-600">{importState.errors.length} row(s) failed:</p>

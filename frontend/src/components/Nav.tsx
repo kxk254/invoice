@@ -17,6 +17,9 @@ export default function Nav({ orgName, username }: { orgName: string; username: 
             <Link href="/import" className="hover:text-slate-900">
               Import
             </Link>
+            <Link href="/restore" className="hover:text-slate-900">
+              Restore
+            </Link>
           </nav>
         </div>
         <div className="flex items-center gap-3 text-sm text-slate-500">

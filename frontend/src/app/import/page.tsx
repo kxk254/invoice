@@ -28,7 +28,9 @@ export default async function ImportPage() {
       <div className="mx-auto w-full max-w-2xl px-4 py-8">
       <h1 className="mb-2 text-xl font-semibold text-slate-900">Import line items</h1>
       <p className="mb-6 text-sm text-slate-500">
-        Adds rows to your organization only — never deletes or overwrites existing data.
+        Adds rows to your organization only. Check &quot;Replace existing periods&quot; to instead swap out a
+        client + month&apos;s current line items for the ones in this file — the invoice number already issued for
+        that period never changes, since it comes from the invoice record, not the line items.{" "}
         <code>company</code> and <code>item_code</code> can be either a numeric id or a short name/slug.
       </p>
 

@@ -7,7 +7,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .. import calc
+from .. import calc, restore_logic
 from ..calc import strip_date
 from ..models import AccountItem, Client, InvoiceCode, ItemCode
 from .permissions import OrganizationScopedMixin, get_active_organization
@@ -264,27 +264,42 @@ def _resolve_ref(queryset, value):
 class ImportView(APIView):
     """
     Imports AccountItem (line item) rows into the requesting user's own
-    organization only. Never touches other organizations' data and never
-    deletes anything — unlike the old Django `restore_view`, which flushed
-    the entire database before reloading.
+    organization only. Never touches other organizations' data — unlike the
+    old Django `restore_view`, which flushed the entire database before
+    reloading.
 
     Body: {"account_items": [{"company": "<id or short_name/slug>",
     "item_code": "<id or short_name/slug>", "invoice_date": "YYYY-MM-DD",
     "payment_due": "YYYY-MM-DD", "action_date": "YYYY-MM-DD", "action_name":
     str, "action_note": str, "invoice_bt": int, "invoice_tax": int,
-    "invoice_at": int}, ...]}
+    "invoice_at": int}, ...], "mode": "create" | "replace"}
+
+    mode="create" (default) only ever adds rows, same as before.
+
+    mode="replace" groups the incoming rows by (company, invoice_date's
+    year-month) — the same key that ties line items to one InvoiceCode — and
+    for each such period swaps out its existing line items for the new ones.
+    The InvoiceCode row for that period (and therefore its already-issued
+    invoice number, which is derived from the InvoiceCode's own id, not from
+    the line items) is never deleted or recreated, only repointed at a
+    surviving line item. A bad row anywhere aborts the whole replace before
+    anything is written, so a period's invoiced items are never deleted
+    without a full replacement landing in the same request.
     """
 
     def post(self, request):
         organization = get_active_organization(request.user)
         rows = request.data.get("account_items")
+        mode = request.data.get("mode", "create")
+        if mode not in ("create", "replace"):
+            return Response({"detail": "mode must be 'create' or 'replace'."}, status=status.HTTP_400_BAD_REQUEST)
         if not isinstance(rows, list):
             return Response({"detail": "account_items must be a list."}, status=status.HTTP_400_BAD_REQUEST)
 
         clients = Client.objects.filter(organization=organization)
         item_codes = ItemCode.objects.filter(organization=organization)
 
-        created = 0
+        prepared = []
         errors = []
         for index, row in enumerate(rows):
             try:
@@ -310,13 +325,75 @@ class ImportView(APIView):
                     row["tax_rate"] = 0
 
             serializer = AccountItemSerializer(data=row, context={"request": request})
-            if serializer.is_valid():
-                serializer.save(organization=organization)
-                created += 1
-            else:
+            if not serializer.is_valid():
                 errors.append({"index": index, "detail": serializer.errors})
+                continue
 
-        return Response({"created": created, "errors": errors}, status=status.HTTP_200_OK)
+            if mode == "replace" and serializer.validated_data.get("invoice_date") is None:
+                errors.append({"index": index, "detail": "invoice_date is required to replace a period."})
+                continue
+
+            prepared.append((row["company"], serializer))
+
+        if errors and mode == "replace":
+            return Response({"created": 0, "replaced_periods": [], "errors": errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        created = 0
+        replaced_periods = []
+        with transaction.atomic():
+            if mode == "replace":
+                periods = {}
+                for company_id, serializer in prepared:
+                    month_start = serializer.validated_data["invoice_date"].replace(day=1)
+                    periods.setdefault((company_id, month_start), []).append(serializer)
+
+                for (company_id, month_start), serializers in periods.items():
+                    _, _, month_end = strip_date(month_start.isoformat())
+                    company = clients.get(pk=company_id)
+                    generated_id = f"{company.slug}-{month_start.strftime('%Y%m')}"
+
+                    old_items = list(AccountItem.objects.filter(
+                        organization=organization, company_id=company_id,
+                        invoice_date__gte=month_start, invoice_date__lte=month_end,
+                    ))
+
+                    new_items = [s.save(organization=organization) for s in serializers]
+                    created += len(new_items)
+
+                    # Repoint the existing InvoiceCode (if any) at a
+                    # surviving line item before deleting the old ones —
+                    # its account_item FK is PROTECTed, and this is what
+                    # keeps the invoice number (derived from the
+                    # InvoiceCode's own id) unchanged across the replace.
+                    invoice_code = InvoiceCode.objects.filter(account_item_slug=generated_id).first()
+                    if invoice_code is not None:
+                        invoice_code.account_item = new_items[0]
+                        invoice_code.save(update_fields=["account_item"])
+
+                    removed = len(old_items)
+                    for item in old_items:
+                        item.delete()
+
+                    replaced_periods.append({
+                        "company": company_id,
+                        "month": month_start.isoformat(),
+                        "removed": removed,
+                        "added": len(new_items),
+                        "invoice_slug": invoice_code.invoice_slug if invoice_code else None,
+                    })
+            else:
+                for _, serializer in prepared:
+                    serializer.save(organization=organization)
+                    created += 1
+
+            # Re-run the same pipeline the invoice list already runs on
+            # every load, so newly-inserted rows are flagged/slugged and
+            # totals reflect the replacement immediately.
+            calc.set_invoice_code(organization)
+            calc.invoice_code_slug_save(organization)
+            calc.total_amount_calc(organization)
+
+        return Response({"created": created, "replaced_periods": replaced_periods, "errors": errors}, status=status.HTTP_200_OK)
 
 
 class InvoicePdfView(APIView):
@@ -331,3 +408,70 @@ class InvoicePdfView(APIView):
         disposition = "attachment" if request.query_params.get("download") else "inline"
         response["Content-Disposition"] = f'{disposition}; filename="{encoded_filename}.pdf"'
         return response
+
+
+def _extract_backup_rows(request):
+    """Accepts either a bare dumpdata-style array (what `manage.py dumpdata`
+    and the NAS backup actually produce) or that array wrapped as
+    {"backup": [...]}, matching how ImportView accepts either shape."""
+    body = request.data
+    rows = body if isinstance(body, list) else body.get("backup")
+    if not isinstance(rows, list):
+        return None
+    return rows
+
+
+class RestorePreviewView(APIView):
+    """
+    Read-only: never creates, updates, or deletes anything. Body: a
+    `manage.py dumpdata` JSON backup (bare array, or {"backup": [...]}).
+    Reports exactly what a RestoreApplyView call with the same body would
+    create/update/delete for the caller's own organization, and any
+    conflicts that would make it refuse to run at all.
+    """
+
+    def post(self, request):
+        organization = get_active_organization(request.user)
+        rows = _extract_backup_rows(request)
+        if rows is None:
+            return Response({"detail": "Body must be a dumpdata JSON array, or {\"backup\": [...]}."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            plan = restore_logic.build_restore_plan(organization, rows)
+        except restore_logic.RestoreError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({"diff": plan.diff(), "conflicts": plan.conflicts()})
+
+
+class RestoreApplyView(APIView):
+    """
+    Destructive: restores the caller's own organization to match the given
+    backup exactly - existing-and-still-present rows are overwritten with
+    the backup's values (at their original ids, so invoice numbers are
+    unchanged), rows present in the backup but missing live are recreated,
+    and rows that exist live but aren't in the backup are deleted. Other
+    organizations are never read or written. Requires `confirm: true` in
+    the body as a deliberate extra step beyond just POSTing a file, and
+    refuses (with no changes at all) if any row would collide with another
+    organization's data.
+
+    Body: a `manage.py dumpdata` JSON backup (bare array, or
+    {"backup": [...], "confirm": true}).
+    """
+
+    def post(self, request):
+        organization = get_active_organization(request.user)
+        rows = _extract_backup_rows(request)
+        if rows is None:
+            return Response({"detail": "Body must be a dumpdata JSON array, or {\"backup\": [...]}."}, status=status.HTTP_400_BAD_REQUEST)
+        if not (isinstance(request.data, dict) and request.data.get("confirm") is True):
+            return Response({"detail": "Set confirm: true to apply a restore."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            plan = restore_logic.build_restore_plan(organization, rows)
+            result = plan.apply()
+        except restore_logic.RestoreError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_409_CONFLICT)
+
+        return Response(result)

@@ -3,7 +3,11 @@
 import { apiMutate, ApiError } from "@/lib/api";
 
 export type ImportState =
-  | { created: number; errors: { index: number; detail: unknown }[] }
+  | {
+      created: number;
+      replaced_periods: { company: number; month: string; removed: number; added: number; invoice_slug: string | null }[];
+      errors: { index: number; detail: unknown }[];
+    }
   | { error: string }
   | undefined;
 
@@ -49,10 +53,12 @@ export async function importJson(_prevState: ImportState, formData: FormData): P
   const accountItems = await readAccountItems(formData);
   if (!Array.isArray(accountItems)) return accountItems;
 
+  const mode = formData.get("mode") === "replace" ? "replace" : "create";
+
   try {
-    const res = await apiMutate("/import/", "POST", { account_items: accountItems });
+    const res = await apiMutate("/import/", "POST", { account_items: accountItems, mode });
     const body = await res.json();
-    return { created: body.created, errors: body.errors };
+    return { created: body.created, replaced_periods: body.replaced_periods ?? [], errors: body.errors };
   } catch (e) {
     return { error: e instanceof ApiError ? e.message : "Import failed." };
   }
