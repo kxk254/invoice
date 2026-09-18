@@ -38,6 +38,8 @@ export type AccountItem = {
   invoice_at: number;
   flag: boolean;
   slug: string | null;
+  deleted_at: string | null;
+  invoice_issued: boolean;
 };
 
 export type InvoiceCode = {
@@ -55,5 +57,6 @@ export type InvoiceCode = {
   invoice_at_gttl: number;
   invoice_tax_flag: boolean;
   sent_at: string | null;
+  amended: boolean;
   items: AccountItem[];
 };

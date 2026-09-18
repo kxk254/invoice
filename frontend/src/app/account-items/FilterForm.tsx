@@ -24,12 +24,12 @@ export default function FilterForm({ clients, company, month }: { clients: Clien
     >
       <input ref={cacheBustRef} type="hidden" name="_ts" />
       <div>
-        <label className="block text-xs font-medium text-slate-500">Client</label>
+        <label className="field-label">Client</label>
         <select
           name="company"
           defaultValue={company}
           onChange={submitFresh}
-          className="mt-1 rounded border border-slate-300 px-2 py-1 text-sm"
+          className="field-input"
         >
           <option value="">All clients</option>
           {clients.map((c) => (
@@ -40,19 +40,19 @@ export default function FilterForm({ clients, company, month }: { clients: Clien
         </select>
       </div>
       <div>
-        <label className="block text-xs font-medium text-slate-500">Month</label>
+        <label className="field-label">Month</label>
         <input
           type="month"
           name="month"
           defaultValue={month}
           onChange={submitFresh}
-          className="mt-1 rounded border border-slate-300 px-2 py-1 text-sm"
+          className="field-input"
         />
       </div>
       <button
         type="submit"
         onClick={() => cacheBustRef.current && (cacheBustRef.current.value = String(Date.now()))}
-        className="rounded bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+        className="btn-primary"
       >
         Filter
       </button>

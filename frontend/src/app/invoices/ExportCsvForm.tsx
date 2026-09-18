@@ -33,34 +33,31 @@ export default function ExportCsvForm({ defaultStart, defaultEnd }: { defaultSta
       action="/export-csv"
       method="get"
       onSubmit={handleSubmit}
-      className="mb-6 flex flex-wrap items-end gap-4 rounded-lg border border-slate-200 bg-white p-4"
+      className="mb-6 flex flex-wrap items-end gap-4 card p-4"
     >
       <div>
-        <label className="block text-xs font-medium text-slate-500">Export CSV: from</label>
+        <label className="field-label">Export CSV: from</label>
         <input
           type="date"
           name="start"
           value={start}
           onChange={(e) => setStart(e.target.value)}
           required
-          className="mt-1 rounded border border-slate-300 px-2 py-1 text-sm"
+          className="field-input"
         />
       </div>
       <div>
-        <label className="block text-xs font-medium text-slate-500">to</label>
+        <label className="field-label">to</label>
         <input
           type="date"
           name="end"
           value={end}
           onChange={(e) => setEnd(e.target.value)}
           required
-          className="mt-1 rounded border border-slate-300 px-2 py-1 text-sm"
+          className="field-input"
         />
       </div>
-      <button
-        type="submit"
-        className="rounded border border-slate-300 px-4 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-      >
+      <button type="submit" className="btn-secondary">
         Export CSV
       </button>
       {error && <p className="w-full text-sm text-red-600">{error}</p>}

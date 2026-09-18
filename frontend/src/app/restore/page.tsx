@@ -18,7 +18,7 @@ export default async function RestorePage() {
         with invoice numbers always kept intact, before anything is written.
       </p>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-6">
+      <div className="card p-6">
         <RestoreForm />
       </div>
       </div>

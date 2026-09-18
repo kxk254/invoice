@@ -14,6 +14,23 @@ function monthStart(month: string) {
   return `${month}-01`;
 }
 
+// 請求日 (invoice_date) defaults to the 1st of the month *after* the
+// 該当月 (action_date) being worked on, matching the model's own defaults
+// (AccountItem.get_first_of_last_month / get_start_of_this_month). Pre-filling
+// it here is just a starting point — the input stays editable so a user can
+// pick a different issue date when needed.
+function nextMonthStart(month: string) {
+  const [year, mon] = month.split("-").map(Number);
+  // `mon` is 1-indexed (e.g. 6 for June); passing it as JS Date's 0-indexed
+  // month argument lands on July, i.e. the month after the one selected.
+  return new Date(year, mon, 1).toISOString().slice(0, 10);
+}
+
+function thisMonthStart() {
+  const today = new Date();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
 export default async function AccountItemsPage(props: PageProps<"/account-items">) {
   const params = await props.searchParams;
   const company = typeof params.company === "string" ? params.company : "";
@@ -46,11 +63,17 @@ export default async function AccountItemsPage(props: PageProps<"/account-items"
         </p>
       )}
 
+      <p className="mb-4 text-xs text-slate-500">
+        Once an invoice has been sent, its rows can still be corrected — added to, edited, or removed — but its issue
+        date is locked (grayed out) and removing a row only voids it: it stays visible here in gray for the record,
+        while disappearing from totals, the PDF, and CSV exports. The invoice itself is then marked（修正版）.
+      </p>
+
       {/* One shared form: existing rows name inputs "field__<id>" and save
           together via the button below; the "add row" draft keeps plain
           names and its own submit button, so the two never mix. */}
       <form action={bulkUpdateAccountItems}>
-        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+        <div className="overflow-x-auto card">
           {/* border-separate (not border-collapse) because sticky cells
               don't stick at all inside a border-collapsed table — row
               dividers are applied per-cell below instead of on <tr>, since
@@ -115,7 +138,11 @@ export default async function AccountItemsPage(props: PageProps<"/account-items"
                 <FieldInputs
                   clients={clients}
                   itemCodes={itemCodes}
-                  defaults={month ? { action_date: monthStart(month) } : undefined}
+                  defaults={
+                    month
+                      ? { action_date: monthStart(month), invoice_date: nextMonthStart(month) }
+                      : { invoice_date: thisMonthStart() }
+                  }
                   stickyBg="bg-slate-50"
                 />
                 <td className="p-1" />
@@ -128,15 +155,11 @@ export default async function AccountItemsPage(props: PageProps<"/account-items"
           <button
             type="submit"
             formAction={createAccountItem}
-            className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500"
+            className="inline-flex items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-500"
           >
             Add row
           </button>
-          <button
-            type="submit"
-            formNoValidate
-            className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
-          >
+          <button type="submit" formNoValidate className="btn-primary py-2">
             Save all changes
           </button>
         </div>

@@ -23,8 +23,8 @@
         justify-content: space-between;
         align-items: flex-end;
         border-bottom: 1.5px solid #333363;
-        padding-bottom: 12px;
-        margin-bottom: 22px;
+        padding-bottom: 8px;
+        margin-bottom: 14px;
     }
 
     .header .title-block {
@@ -51,14 +51,14 @@
         text-align: right;
         font-size: 10.5px;
         color: #55555f;
-        line-height: 1.9;
+        line-height: 1.6;
     }
 
     .parties {
         display: flex;
         justify-content: space-between;
         align-items: flex-start;
-        margin-bottom: 20px;
+        margin-bottom: 14px;
     }
 
     .bill-to .name {
@@ -117,7 +117,7 @@
         display: flex;
         justify-content: space-between;
         gap: 16px;
-        margin-bottom: 22px;
+        margin-bottom: 14px;
     }
 
     .total-card {
@@ -126,7 +126,7 @@
         border: 1px solid #d8d8e2;
         border-left: 3px solid #333363;
         border-radius: 2px;
-        padding: 13px 18px;
+        padding: 10px 18px;
     }
 
     .total-card .label {
@@ -139,24 +139,24 @@
         font-size: 25px;
         font-weight: 700;
         color: #333363;
-        margin: 5px 0 9px 0;
+        margin: 4px 0 6px 0;
     }
 
     .total-card .due {
         font-size: 11px;
         color: #444450;
         border-top: 1px solid #e2e2ea;
-        padding-top: 7px;
+        padding-top: 5px;
     }
 
     .bank-card {
         flex: 1;
         background: #f6f6f9;
         border-radius: 2px;
-        padding: 12px 16px;
+        padding: 9px 16px;
         font-size: 11px;
         color: #33333d;
-        line-height: 1.75;
+        line-height: 1.55;
     }
 
     .bank-card .label {
@@ -180,7 +180,7 @@
         font-weight: 700;
         letter-spacing: 1px;
         text-align: left;
-        padding: 8px 8px;
+        padding: 5px 8px;
         border-bottom: 2px solid #333363;
     }
 
@@ -188,10 +188,17 @@
         text-align: right;
     }
 
+    table.items tbody tr {
+        /* Only matters for invoices long enough to spill onto a 2nd page -
+           stops a row's content from being split across the page break. */
+        page-break-inside: avoid;
+    }
+
     table.items tbody td {
-        padding: 8px 8px;
+        padding: 4px 8px;
         border-bottom: 1px solid #e6e6ec;
         vertical-align: top;
+        line-height: 1.3;
     }
 
     table.items tbody tr:nth-child(even) td {
@@ -206,13 +213,13 @@
     table.items tbody td.note {
         font-size: 9.5px;
         color: #444450;
-        line-height: 1.5;
+        line-height: 1.3;
     }
 
     table.items tfoot td {
         border-top: 1.5px solid #333363;
         border-bottom: 3px double #333363;
-        padding: 9px 8px;
+        padding: 6px 8px;
         font-weight: 700;
         color: #1a1a1a;
     }
@@ -224,7 +231,7 @@
     .tax-breakdown {
         display: flex;
         justify-content: flex-end;
-        margin-top: 20px;
+        margin-top: 10px;
     }
 
     .tax-breakdown-inner {
@@ -265,7 +272,7 @@
     }
 
     .footnotes {
-        margin-top: 18px;
+        margin-top: 10px;
         font-size: 9.5px;
         color: #77777f;
         line-height: 1.7;
@@ -278,11 +285,12 @@
 <div class="header">
     <div class="title-block">
         <div class="eyebrow">I N V O I C E</div>
-        <h1>請求書</h1>
+        <h1>請求書{% if amended %}（修正版）{% endif %}</h1>
     </div>
     <div class="meta">
         請求書番号　{{ invoice_num|format_id }}<br>
-        請求書発行日　{{ today|japan_day_format }}
+        請求書発行日　{{ invoice_date|japan_day_format }}<br>
+        対象月　{{ target_month|japan_month_format }}
     </div>
 </div>
 
@@ -323,16 +331,14 @@
 
 <table class="items">
     <colgroup>
-        <col style="width: 17%">
-        <col style="width: 17%">
-        <col style="width: 31%">
-        <col style="width: 10%">
-        <col style="width: 25%">
+        <col style="width: 30%">
+        <col style="width: 40%">
+        <col style="width: 8%">
+        <col style="width: 22%">
     </colgroup>
     <thead>
         <tr>
             <th>品目</th>
-            <th>対象月</th>
             <th>内容・摘要</th>
             <th class="num">税率</th>
             <th class="num">金額（円）</th>
@@ -342,19 +348,17 @@
         {% for record in object %}
         <tr>
             <td>{{ record.action_name }}</td>
-            <td>{{ record.action_date|japan_month_format }}</td>
             <td class="note">{{ record.action_note|caseclean }}</td>
             <td class="num">{% if record.tax_rate == 0 %}無税{% else %}{{ record.tax_rate }}%{% endif %}</td>
             <td class="num">{{ record.invoice_bt|format_with_000s }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="5">明細がありません。</td></tr>
+        <tr><td colspan="4">明細がありません。</td></tr>
         {% endfor %}
     </tbody>
     <tfoot>
         <tr>
             <td>合計</td>
-            <td></td>
             <td></td>
             <td></td>
             <td class="num">{{ total_bt_gttl|format_with_000s }}</td>

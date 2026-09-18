@@ -3,7 +3,17 @@
 import { useRef } from "react";
 import type { Client } from "@/lib/types";
 
-export default function FilterForm({ clients, company, month }: { clients: Client[]; company: string; month: string }) {
+export default function FilterForm({
+  clients,
+  company,
+  month,
+  number,
+}: {
+  clients: Client[];
+  company: string;
+  month: string;
+  number: string;
+}) {
   const formRef = useRef<HTMLFormElement>(null);
   const cacheBustRef = useRef<HTMLInputElement>(null);
 
@@ -11,21 +21,25 @@ export default function FilterForm({ clients, company, month }: { clients: Clien
   // URL and reuse it for what looks like a "new" navigation. Stamping a
   // fresh value in here on every submit guarantees the URL is unique each
   // time, which defeats that regardless of where the caching happens.
-  function submitFresh() {
+  function stampCacheBust() {
     if (cacheBustRef.current) cacheBustRef.current.value = String(Date.now());
+  }
+
+  function submitFresh() {
+    stampCacheBust();
     formRef.current?.requestSubmit();
   }
 
   return (
-    <form ref={formRef} method="get" className="flex flex-wrap items-end gap-4">
+    <form ref={formRef} method="get" className="flex flex-wrap items-end gap-4" onSubmit={stampCacheBust}>
       <input ref={cacheBustRef} type="hidden" name="_ts" />
       <div>
-        <label className="block text-xs font-medium text-slate-500">Client</label>
+        <label className="field-label">Client</label>
         <select
           name="company"
           defaultValue={company}
           onChange={submitFresh}
-          className="mt-1 rounded border border-slate-300 px-2 py-1 text-sm"
+          className="field-input"
         >
           <option value="">All clients</option>
           {clients.map((c) => (
@@ -36,20 +50,26 @@ export default function FilterForm({ clients, company, month }: { clients: Clien
         </select>
       </div>
       <div>
-        <label className="block text-xs font-medium text-slate-500">Month</label>
+        <label className="field-label">Month</label>
         <input
           type="month"
           name="month"
           defaultValue={month}
           onChange={submitFresh}
-          className="mt-1 rounded border border-slate-300 px-2 py-1 text-sm"
+          className="field-input"
         />
       </div>
-      <button
-        type="submit"
-        onClick={() => cacheBustRef.current && (cacheBustRef.current.value = String(Date.now()))}
-        className="rounded bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
-      >
+      <div>
+        <label className="field-label">Invoice #/ID</label>
+        <input
+          type="text"
+          name="number"
+          defaultValue={number}
+          placeholder="e.g. 2025-0007 or 42"
+          className="field-input"
+        />
+      </div>
+      <button type="submit" className="btn-primary">
         Filter
       </button>
     </form>

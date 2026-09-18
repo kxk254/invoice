@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import Spinner from "@/components/Spinner";
 import { previewRestore, applyRestore } from "./actions";
 
 const LABELS: Record<string, string> = {
@@ -50,7 +51,7 @@ export default function RestoreForm() {
         required
         ref={fileInputRef}
         onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        className="text-sm file:mr-3 file:rounded file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white"
+        className="text-sm file:mr-3 file:rounded-md file:border-0 file:bg-brand file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white file:transition-colors hover:file:bg-brand-dark"
       />
 
       <div className="flex flex-wrap gap-3">
@@ -58,8 +59,9 @@ export default function RestoreForm() {
           type="submit"
           formAction={previewAction}
           disabled={!file || previewPending || applyPending}
-          className="w-fit rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          className="btn-secondary w-fit py-2"
         >
+          {previewPending && <Spinner />}
           {previewPending ? "Checking..." : "Preview restore"}
         </button>
       </div>
@@ -67,7 +69,7 @@ export default function RestoreForm() {
       {previewState && "error" in previewState && <p className="text-sm text-red-600">{previewState.error}</p>}
 
       {hasPreview && (
-        <div className="rounded border border-slate-200 bg-slate-50 p-4 text-sm">
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm">
           {hasConflicts ? (
             <>
               <p className="font-medium text-red-600">
@@ -101,7 +103,7 @@ export default function RestoreForm() {
                   type="checkbox"
                   checked={understood}
                   onChange={(e) => setUnderstood(e.target.checked)}
-                  className="mt-0.5"
+                  className="mt-0.5 accent-red-600"
                 />
                 <span>
                   I understand the &quot;delete&quot; rows above will be permanently removed, and this cannot be
@@ -113,8 +115,9 @@ export default function RestoreForm() {
                 type="submit"
                 formAction={applyAction}
                 disabled={!canApply || applyPending}
-                className="mt-3 w-fit rounded bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-40"
+                className="btn-danger mt-3 w-fit py-2"
               >
+                {applyPending && <Spinner />}
                 {applyPending ? "Restoring..." : "Apply restore"}
               </button>
             </>
@@ -125,7 +128,7 @@ export default function RestoreForm() {
       {applyState && "error" in applyState && <p className="text-sm text-red-600">{applyState.error}</p>}
 
       {applyState && "invoice_code" in applyState && (
-        <div className="rounded border border-emerald-200 bg-emerald-50 p-4 text-sm">
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm">
           <p className="font-medium text-emerald-700">Restore complete.</p>
           <ul className="mt-2 list-disc pl-5 text-slate-700">
             <li>Line items: {applyState.account_item} restored, {applyState.deleted.account_item} removed</li>

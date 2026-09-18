@@ -1,4 +1,6 @@
+import logging
 import math, csv
+from collections import Counter
 from .models import AccountItem, InvoiceCode, Client
 from django.db.models import Sum
 from datetime import datetime, timedelta
@@ -15,6 +17,8 @@ import base64
 from django.conf import settings
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 
 '''
 Set Invoice ID for invoice generation
@@ -26,23 +30,15 @@ def set_invoice_code(organization):
         for account in accounts:
             report_date_formatted = account.invoice_date.strftime("%Y%m") if account.invoice_date else "000000"
             generated_id = f"{account.company.slug}-{report_date_formatted}"
-            
+
              # Start a transaction block to ensure atomicity
             with transaction.atomic():
                 account.slug = generated_id
                 account.flag = True
                 account.save()
 
-                print("generated_id in account.slug", account.slug)
-
-                if isinstance(account, AccountItem):
-                    print("This is a valid AccountItem object.", account)
-                else:
-                    print("This is NOT a valid AccountItem object.")
-
                 # Check if the generated 契約書ID already exists in 請求書ID管理
                 if InvoiceCode.objects.filter(account_item_slug=generated_id).exists():
-                    print(f"Duplicate detected in InvoiceCode for 契約書ID: {generated_id}. Skipping creation/update in InvoiceCode.")
                     continue  # Only skip this account; other unflagged accounts still need processing
 
                 try:
@@ -54,14 +50,8 @@ def set_invoice_code(organization):
                         invoice_tax_ttl=0,
                         invoice_at_ttl=0,
                     )
-                    print(f"Created new InvoiceCode with slug:  {generated_id}")
-                    print("created invoicecode")
-                    print("generated_id", generated_id)
-                    print("account_item", account)
-                    print("payment_due", account.payment_due)
-                except IntegrityError as e:
-                    print(f"IntegrityError detected for 契約書ID: {generated_id}. Error: {str(e)}")
-                    print(f"Skipping creation/update for this ID: {generated_id}")
+                except IntegrityError:
+                    logger.warning("Skipping InvoiceCode creation for %s: already exists.", generated_id)
 
 
 """
@@ -90,7 +80,9 @@ def total_amount_calc(organization):
 
     for invoice in all_invoices:
 
-        sort_revenues = revenues.filter(slug=invoice.account_item_slug)
+        # Logically-deleted rows (voided after the invoice was sent) stay in
+        # the database for audit purposes but must never count toward totals.
+        sort_revenues = revenues.filter(slug=invoice.account_item_slug, deleted_at__isnull=True)
 
         """COMPLY WITH LAWS"""
         # Japan's qualified-invoice rules require consumption tax to be
@@ -143,28 +135,24 @@ def preprocess_post_data(post_data):
         invoice_bt = f"form-{i}-invoice_bt"
         invoice_at = f"form-{i}-invoice_at"
         invoice_tax = f"form-{i}-invoice_tax"
-        print("form-{i}-invoice_tax",invoice_tax)
 
         # Clean invoice_bt field
         if invoice_bt in cleaned_data:
             invoice_bt_value = cleaned_data[invoice_bt]
             if invoice_bt_value and isinstance(invoice_bt_value, str):
                 cleaned_data[invoice_bt] = invoice_bt_value.replace(',', '')
-                print("cleaned data invoice_bt",cleaned_data[invoice_bt])
 
         # Clean invoice_at field
         if invoice_at in cleaned_data:
             invoice_at_value = cleaned_data[invoice_at]
             if invoice_at_value and isinstance(invoice_at_value, str):
                 cleaned_data[invoice_at] = invoice_at_value.replace(',', '')
-                print("cleaned data invoice_at",cleaned_data[invoice_at])
-        
+
         # Clean tax field
         if invoice_tax in cleaned_data:
             tax_value = cleaned_data[invoice_tax]
             if tax_value and isinstance(tax_value, str):
                 cleaned_data[invoice_tax] = tax_value.replace(',', '')
-                print("cleaned data invoice_tax",cleaned_data[invoice_tax])
 
     return cleaned_data
 
@@ -177,25 +165,111 @@ def tax_calc_def(organization, selected_company, selected_month):
             queryset = queryset.filter(invoice_date__gte=start_of_month, invoice_date__lte=end_of_month)
         else:
             queryset = queryset.filter(company=selected_company, invoice_date__gte=start_of_month, invoice_date__lte=end_of_month)
-        
-        print("BEFORE QUERY SET TAX", queryset.query)
+
         for query in queryset:
-            print("QUERY", query)
             rate = query.tax_rate / 100
             if query.invoice_at == 0:
                 query.invoice_tax = int(query.invoice_bt * rate)
-                print("請求消費税 ", query.invoice_tax)
                 query.invoice_at = query.invoice_bt + query.invoice_tax
-                print("請求金額 SEIKYU KINGAKU", query.invoice_bt)
                 query.save()
             elif query.invoice_bt == 0:
                 query.invoice_tax = int(query.invoice_at * (1 - 1 / (1 + rate)))
-                print("請求消費税 ", query.invoice_tax)
                 query.invoice_bt = query.invoice_at - query.invoice_tax
-                print("請求金額 SEIKYU KINGAKU", query.invoice_bt)
                 query.save()
 
 
+"""
+Looks up the InvoiceCode (if any) that a line item with this company +
+invoice_date belongs to, using the same (company slug, year-month) grouping
+key set_invoice_code() assigns - independent of whether that item's own
+`slug` field has actually been refreshed yet (plain AccountItem create/
+update/delete never re-runs that pipeline, only the Invoices page and
+import/bulk actions do).
+"""
+def find_invoice_code_for_item(organization, company, invoice_date):
+    if not company or not invoice_date:
+        return None
+    candidate_slug = f"{company.slug}-{invoice_date.strftime('%Y%m')}"
+    return InvoiceCode.objects.filter(account_item_slug=candidate_slug, account_item__organization=organization).first()
+
+
+"""
+請求日の表記ゆれ補正 (invoice_date alignment)
+
+Line items are grouped into one invoice by (company, invoice_date's
+year-month) - see set_invoice_code(). Within that group every row should
+carry the same invoice_date (the day the invoice was issued), but a manual
+typo can leave one row on a different day of the same month (e.g. most of
+a period's rows are 2025-09-01 but one was entered as 2025-09-15). This
+finds those stragglers and proposes correcting them to whichever exact
+date is most common in their group - the "obviously it should have been
+this" value, not a guess. A group with no single most-common date (an
+exact tie) is left alone and reported separately, since there's no safe
+default to pick for the caller.
+"""
+def plan_invoice_date_alignment(organization, company="", month=""):
+    qs = AccountItem.objects.filter(organization=organization, invoice_date__isnull=False).select_related("company")
+    if month:
+        _, start_of_month, end_of_month = strip_date(month)
+        qs = qs.filter(invoice_date__gte=start_of_month, invoice_date__lte=end_of_month)
+    if company:
+        qs = qs.filter(company_id=company)
+
+    groups = {}
+    for item in qs:
+        key = (item.company_id, item.invoice_date.strftime("%Y-%m"))
+        groups.setdefault(key, []).append(item)
+
+    changes = []
+    skipped_ties = []
+    for (company_id, period), items in groups.items():
+        # Once an invoice has been sent, its issue date is frozen (see
+        # AccountItemViewSet.perform_update) - realigning it automatically
+        # here would silently rewrite a document the client already has.
+        invoice_code = find_invoice_code_for_item(organization, items[0].company, items[0].invoice_date)
+        if invoice_code and invoice_code.sent_at:
+            continue
+
+        counts = Counter(item.invoice_date for item in items)
+        if len(counts) == 1:
+            continue  # every row in this invoice already agrees
+
+        ranked = counts.most_common()
+        top_count = ranked[0][1]
+        tied = [d for d, c in ranked if c == top_count]
+        if len(tied) > 1:
+            skipped_ties.append({
+                "company_id": company_id,
+                "company_name": items[0].company.name,
+                "period": period,
+                "candidates": {d.isoformat(): c for d, c in ranked},
+            })
+            continue
+
+        target = tied[0]
+        for item in items:
+            if item.invoice_date != target:
+                changes.append({
+                    "id": item.id,
+                    "company_id": company_id,
+                    "company_name": items[0].company.name,
+                    "period": period,
+                    "current": item.invoice_date.isoformat(),
+                    "target": target.isoformat(),
+                })
+
+    return changes, skipped_ties
+
+
+def apply_invoice_date_alignment(organization, company="", month=""):
+    changes, skipped_ties = plan_invoice_date_alignment(organization, company, month)
+    target_by_id = {c["id"]: c["target"] for c in changes}
+    if target_by_id:
+        with transaction.atomic():
+            for item in AccountItem.objects.filter(organization=organization, id__in=target_by_id.keys()):
+                item.invoice_date = datetime.strptime(target_by_id[item.id], "%Y-%m-%d").date()
+                item.save(update_fields=["invoice_date"])
+    return changes, skipped_ties
 
 
 """
@@ -205,16 +279,17 @@ kwargs = {
     }
 """
 def prepare_invoice_items(organization, slug, interactive=False):
-    # print("5000 kwargs print", slug)
     context = {'interactive': interactive}
     invoicecode = InvoiceCode.objects.get(account_item_slug=slug['slug'], account_item__organization=organization)
-    # print("invoicecode 5000  print", invoicecode)
 
     _, month_ym, _ = strip_date(str(invoicecode.account_item.invoice_date))
     date_obj = datetime.strptime(str(invoicecode.account_item.invoice_date), "%Y-%m-%d")
     act_date = datetime.strptime(str(invoicecode.account_item.action_date), "%Y-%m-%d")
-    accountitem = AccountItem.objects.filter(slug=slug['slug'], organization=organization).order_by('-invoice_date', 'item_code')
-    # print("accountitem 5000  print", accountitem)
+    # Logically-deleted (voided) line items never appear on the PDF the
+    # client sees, even though they stay in the database for audit purposes.
+    accountitem = AccountItem.objects.filter(
+        slug=slug['slug'], organization=organization, deleted_at__isnull=True
+    ).order_by('-invoice_date', 'item_code')
 
     # 税率毎の明細：実際に使われている税率ごとに動的に集計（0%/8%/10%等が混在しても対応）
     # 消費税額は税率区分ごとに合計した金額に対して一度だけ端数処理する（明細行ごとの
@@ -237,6 +312,7 @@ def prepare_invoice_items(organization, slug, interactive=False):
     context['payment_due'] = invoicecode.payment_due
     # 請求書番号、テナントID、合計額、本日の日付を取得
     context['invoice_num'] = invoicecode.invoice_slug  #請求書番号
+    context['amended'] = invoicecode.amended
     context['total_amount_bt'] = invoicecode.invoice_bt_ttl 
     context['total_tax'] = invoicecode.invoice_tax_ttl 
     context['total_amount_at'] = invoicecode.invoice_at_ttl 
@@ -271,7 +347,8 @@ def prepare_invoice_items(organization, slug, interactive=False):
     # context['stamp_path'] = 'http://localhost:8000/static/images/soliton_stamp.png'
 
     # encoded_filename = urllib.parse.quote(f"【CS築地{month}月】{floor}請求書.pdf")
-    context['filename'] = f"【{context['my_company'][:9]}】{invoicecode.account_item.company.slug}-{context['act_date_year']}年{context['act_date_month']}月分請求書"
+    amended_suffix = "（修正版）" if invoicecode.amended else ""
+    context['filename'] = f"【{context['my_company'][:9]}】{invoicecode.account_item.company.slug}-{context['act_date_year']}年{context['act_date_month']}月分請求書{amended_suffix}"
     context['encoded_filename'] = quote(context['filename'])
 
     #html テンプレート作成
@@ -288,9 +365,14 @@ def prepare_invoice_items(organization, slug, interactive=False):
     # 物件番号、レポート日、部屋番号、請求書番号を取得
         'selected_company': invoicecode.account_item.company.name,
         'selected_month': month_ym,
+        # Every existing invoice's rows share one 対象月 (see set_invoice_code's
+        # grouping), so it's shown once here instead of repeated on every
+        # table row - frees up column width for 品目/内容・摘要.
+        'target_month': act_date,
         'payment_due': invoicecode.payment_due,
         # 請求書番号、テナントID、合計額、本日の日付を取得
         'invoice_num': invoicecode.invoice_slug,  #請求書番号
+        'amended': invoicecode.amended,
         'total_amount': invoicecode.invoice_bt_ttl,
         'total_tax': invoicecode.invoice_tax_ttl,
         'total_inclusive': invoicecode.invoice_at_ttl, 
@@ -305,6 +387,10 @@ def prepare_invoice_items(organization, slug, interactive=False):
 
 
         'today': datetime.today(),
+        # 請求書発行日: the line item's own invoice_date (user-editable,
+        # defaults to the 1st of the month), not the date the PDF happens
+        # to be rendered/downloaded on.
+        'invoice_date': date_obj,
         'report_date_yymm': date_obj.strftime('%Y%m'),
         'report_date_year': date_obj.strftime('%Y'),
         'report_date_month': date_obj.strftime('%m'),
@@ -337,20 +423,12 @@ def prepare_invoice_items(organization, slug, interactive=False):
 """FOR WEASY PRINT"""
 def modify_html_for_weasyprint(html_content):
     static_url_prefix = settings.STATIC_URL
-    print("[modify_html_for_weasyprint]-static_url_prefix:", static_url_prefix)
     static_root_path = Path(settings.STATIC_ROOT).resolve()
-
-    print("[modify_html_for_weasyprint]-Modified html content snippet:", static_root_path)
     static_root_file_url_base = static_root_path.as_uri()
-    print("[modify_html_for_weasyprint]-static_root_file_url_base:", static_root_file_url_base)
     if not static_root_file_url_base.endswith('/'):
         static_root_file_url_base += '/'
-    
-    html_content_modified = html_content.replace(
-        static_url_prefix, static_root_file_url_base
-    )
-    print("[modify_html_for_weasyprint]-Modified html content snippet:", html_content_modified)
-    return html_content_modified
+
+    return html_content.replace(static_url_prefix, static_root_file_url_base)
 
 
 
@@ -365,8 +443,8 @@ def preview_email_before_send(request, organization, **kwargs):
     try:
         pdf_bytes = HTML(string=html_content_modified).write_pdf(stylesheets=[CSS(string='@page { size: A4; margin: 1cm; }')])
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
-    except Exception as e:
-        print(f"Error generating PDF: {e}")
+    except Exception:
+        logger.exception("Error generating PDF preview")
     
     slug = context['slug']['slug']
     
@@ -428,8 +506,6 @@ def export_to_csv(queryset, st, ed):
             支出 = 0
             適用 = obj.action_date.strftime('%Y') + '年' + obj.action_date.strftime('%m')+ '月分' + obj.action_name + '-' + obj.company.name_yayoi if obj.action_name else ''
             請求書区分 = '適格'
-
-            print("year",年 , "month", 月, "day", 日, 'income', 収入, '適用',適用, '請求書区分', 請求書区分)
 
             writer.writerow([
                 年,  # Assuming 物件ID is a ForeignKey

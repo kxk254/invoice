@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import Spinner from "@/components/Spinner";
 import { importJson, diffImportJson } from "./actions";
 
 export default function ImportForm() {
@@ -38,7 +39,7 @@ export default function ImportForm() {
         required
         ref={fileInputRef}
         onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        className="text-sm file:mr-3 file:rounded file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white"
+        className="text-sm file:mr-3 file:rounded-md file:border-0 file:bg-brand file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white file:transition-colors hover:file:bg-brand-dark"
       />
 
       <label className="flex items-start gap-2 text-sm text-slate-700">
@@ -48,7 +49,7 @@ export default function ImportForm() {
           value="replace"
           checked={replace}
           onChange={(e) => setReplace(e.target.checked)}
-          className="mt-0.5"
+          className="mt-0.5 accent-brand"
         />
         <span>
           Replace existing periods
@@ -65,16 +66,18 @@ export default function ImportForm() {
           type="submit"
           formAction={diffAction}
           disabled={!file || importPending || diffPending}
-          className="w-fit rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          className="btn-secondary w-fit py-2"
         >
+          {diffPending && <Spinner />}
           {diffPending ? "Comparing..." : "Compare only (no changes)"}
         </button>
         <button
           type="submit"
           formAction={importAction}
           disabled={!file || importPending || diffPending}
-          className="w-fit rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+          className="btn-primary w-fit py-2"
         >
+          {importPending && <Spinner />}
           {importPending ? "Importing..." : "Import"}
         </button>
       </div>
@@ -82,7 +85,7 @@ export default function ImportForm() {
       {diffState && "error" in diffState && <p className="text-sm text-red-600">{diffState.error}</p>}
 
       {diffState && "total" in diffState && (
-        <div className="rounded border border-slate-200 bg-slate-50 p-4 text-sm">
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm">
           <p className="font-medium text-slate-900">
             {diffState.total} row(s) checked — {diffState.matched} match the database exactly.
           </p>
@@ -135,7 +138,7 @@ export default function ImportForm() {
       {importState && "error" in importState && <p className="text-sm text-red-600">{importState.error}</p>}
 
       {importState && "created" in importState && (
-        <div className="rounded border border-slate-200 bg-slate-50 p-4 text-sm">
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm">
           <p className="font-medium text-emerald-700">Created {importState.created} line item(s).</p>
           {importState.replaced_periods.length > 0 && (
             <ul className="mt-2 list-disc pl-5 text-slate-600">

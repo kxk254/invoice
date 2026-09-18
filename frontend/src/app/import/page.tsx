@@ -34,13 +34,13 @@ export default async function ImportPage() {
         <code>company</code> and <code>item_code</code> can be either a numeric id or a short name/slug.
       </p>
 
-      <div className="mb-6 rounded-lg border border-slate-200 bg-white p-6">
+      <div className="mb-6 card p-6">
         <ImportForm />
       </div>
 
-      <details className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+      <details className="card border-slate-200 bg-slate-50 p-4 text-sm">
         <summary className="cursor-pointer font-medium text-slate-700">Expected JSON format</summary>
-        <pre className="mt-3 overflow-x-auto rounded bg-slate-900 p-3 text-xs text-slate-100">{EXAMPLE}</pre>
+        <pre className="mt-3 overflow-x-auto rounded-md bg-slate-900 p-3 text-xs text-slate-100">{EXAMPLE}</pre>
       </details>
       </div>
     </>

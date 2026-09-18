@@ -11,26 +11,30 @@ export default function Icon() {
           width: "100%",
           height: "100%",
           display: "flex",
-          background: "#333363",
-          borderRadius: 7,
+          position: "relative",
+          background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
+          borderRadius: 8,
           overflow: "hidden",
         }}
       >
-        <svg width="32" height="32" viewBox="0 0 32 32">
-          {/* 請求書 (receipt/invoice paper) */}
-          <rect x={7} y={4} width={18} height={24} rx={2} fill="#ffffff" />
-          <path d="M20 4 L25 4 L25 9 Z" fill="#b9c0d4" />
-          {/* Yen mark */}
+        {/* Soft top-left gloss for a bit of depth on an otherwise flat mark */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "radial-gradient(circle at 28% 22%, rgba(255,255,255,0.35), rgba(255,255,255,0) 55%)",
+          }}
+        />
+        <svg width="32" height="32" viewBox="0 0 32 32" style={{ position: "absolute" }}>
+          {/* Bold yen mark - the single glyph carries the icon at tiny sizes */}
           <path
-            d="M11 8 L16 15 M21 8 L16 15 M16 15 L16 24 M11.5 18 L20.5 18 M11.5 21 L20.5 21"
+            d="M10.5 7.5 L16 15 M21.5 7.5 L16 15 M16 15 L16 25 M11 18.5 L21 18.5 M11 21.5 L21 21.5"
             fill="none"
-            stroke="#333363"
-            strokeWidth={2.3}
+            stroke="#ffffff"
+            strokeWidth={2.8}
             strokeLinecap="round"
             strokeLinejoin="round"
           />
-          {/* Hanko seal stamp accent */}
-          <circle cx={26} cy={26} r={5} fill="#d1382c" stroke="#333363" strokeWidth={1.6} />
         </svg>
       </div>
     ),

@@ -3,6 +3,7 @@ import type { Client, InvoiceCode, Me } from "@/lib/types";
 import Nav from "@/components/Nav";
 import FilterForm from "./FilterForm";
 import ExportCsvForm from "./ExportCsvForm";
+import AlignDatesForm from "./AlignDatesForm";
 import { runTaxCalc, markInvoiceSent, unmarkInvoiceSent } from "./actions";
 
 // This page's list depends entirely on the `month`/`company` query string;
@@ -27,10 +28,12 @@ export default async function InvoicesPage(props: PageProps<"/invoices">) {
   const params = await props.searchParams;
   const company = typeof params.company === "string" ? params.company : "";
   const month = typeof params.month === "string" && params.month ? params.month : "";
+  const number = typeof params.number === "string" ? params.number.trim() : "";
 
   const query = new URLSearchParams();
   if (month) query.set("month", monthStart(month));
   if (company) query.set("company", company);
+  if (number) query.set("number", number);
 
   const [me, clients, invoices] = await Promise.all([
     apiGet<Me>("/me/"),
@@ -44,21 +47,25 @@ export default async function InvoicesPage(props: PageProps<"/invoices">) {
       <div className="mx-auto w-full max-w-6xl px-4 py-8">
       <h1 className="mb-6 text-xl font-semibold text-slate-900">Invoices</h1>
 
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4 rounded-lg border border-slate-200 bg-white p-4">
-        <FilterForm clients={clients} company={company} month={month} />
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4 card p-4">
+        <FilterForm clients={clients} company={company} month={month} number={number} />
 
-        <form action={runTaxCalc} className="flex items-end gap-2">
-          <input type="hidden" name="company" value={company} />
-          <input type="hidden" name="month" value={month ? monthStart(month) : ""} />
-          <button
-            type="submit"
-            disabled={!month}
-            className="rounded border border-slate-300 px-4 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-            title={month ? undefined : "Pick a month first"}
-          >
-            Recalculate tax
-          </button>
-        </form>
+        <div className="flex flex-wrap items-end gap-2">
+          <form action={runTaxCalc} className="flex items-end gap-2">
+            <input type="hidden" name="company" value={company} />
+            <input type="hidden" name="month" value={month ? monthStart(month) : ""} />
+            <button
+              type="submit"
+              disabled={!month}
+              className="btn-secondary"
+              title={month ? undefined : "Pick a month first"}
+            >
+              Recalculate tax
+            </button>
+          </form>
+
+          <AlignDatesForm company={company} month={month ? monthStart(month) : ""} />
+        </div>
       </div>
 
       <ExportCsvForm
@@ -66,8 +73,8 @@ export default async function InvoicesPage(props: PageProps<"/invoices">) {
         defaultEnd={month ? monthEnd(month) : ""}
       />
 
-      {month && (
-        <div className="mb-6 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+      {(month || company || number) && (
+        <div className="mb-6 overflow-x-auto card">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs font-medium text-slate-500">
@@ -86,22 +93,22 @@ export default async function InvoicesPage(props: PageProps<"/invoices">) {
                 return (
                   <tr key={invoice.id} className="border-b border-slate-100 last:border-0">
                     <td className="p-2 text-slate-900">{invoice.client_name}</td>
-                    <td className="p-2 text-slate-500">{invoice.invoice_slug ?? invoice.account_item_slug}</td>
+                    <td className="p-2 text-slate-500">
+                      {invoice.invoice_slug ?? invoice.account_item_slug}
+                      {invoice.amended && <span className="ml-1.5 badge-neutral text-amber-700">修正版</span>}
+                    </td>
                     <td className="p-2 text-slate-500">{invoice.payment_due ?? "—"}</td>
                     <td className="p-2 text-right font-medium text-slate-900">¥{yen.format(invoice.invoice_at_gttl)}</td>
                     <td className="p-2">
                       {invoice.sent_at ? (
-                        <span className="text-emerald-700">送信済み（{dateFmt.format(new Date(invoice.sent_at))}）</span>
+                        <span className="badge-success">送信済み（{dateFmt.format(new Date(invoice.sent_at))}）</span>
                       ) : (
-                        <span className="text-slate-400">未送信</span>
+                        <span className="badge-neutral">未送信</span>
                       )}
                     </td>
                     <td className="whitespace-nowrap p-2 text-right">
                       <form action={invoice.sent_at ? unmarkSentWithId : markSentWithId} className="inline">
-                        <button
-                          type="submit"
-                          className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                        >
+                        <button type="submit" className="btn-secondary px-3 py-1 text-xs">
                           {invoice.sent_at ? "未送信に戻す" : "送信済みにする"}
                         </button>
                       </form>
@@ -123,10 +130,13 @@ export default async function InvoicesPage(props: PageProps<"/invoices">) {
 
       <div className="space-y-4">
         {invoices.map((invoice) => (
-          <div key={invoice.id} className="rounded-lg border border-slate-200 bg-white">
+          <div key={invoice.id} className="card">
             <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 p-4">
               <div>
-                <p className="font-medium text-slate-900">{invoice.client_name}</p>
+                <p className="flex items-center gap-2 font-medium text-slate-900">
+                  {invoice.client_name}
+                  {invoice.amended && <span className="badge-neutral text-amber-700">修正版</span>}
+                </p>
                 <p className="text-xs text-slate-500">{invoice.invoice_slug ?? invoice.account_item_slug}</p>
               </div>
               <div className="flex items-center gap-6 text-sm">
@@ -139,13 +149,13 @@ export default async function InvoicesPage(props: PageProps<"/invoices">) {
                     href={`/invoices/${invoice.account_item_slug}/pdf`}
                     target="_blank"
                     rel="noreferrer"
-                    className="rounded border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    className="btn-secondary px-3 py-1.5 text-xs"
                   >
                     Preview PDF
                   </a>
                   <a
                     href={`/invoices/${invoice.account_item_slug}/pdf?download=1`}
-                    className="rounded bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800"
+                    className="btn-primary px-3 py-1.5 text-xs"
                   >
                     Download
                   </a>
@@ -166,9 +176,7 @@ export default async function InvoicesPage(props: PageProps<"/invoices">) {
           </div>
         ))}
         {invoices.length === 0 && (
-          <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
-            No invoices for this filter.
-          </div>
+          <div className="card p-8 text-center text-sm text-slate-400">No invoices for this filter.</div>
         )}
       </div>
       </div>

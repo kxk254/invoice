@@ -4,6 +4,7 @@ from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -38,7 +39,7 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
     serializer_class = AccountItemSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset().order_by("-invoice_date", "item_code__slug")
+        qs = super().get_queryset().select_related("company").order_by("-invoice_date", "item_code__slug")
         company = self.request.query_params.get("company")
         month = self.request.query_params.get("month")
         if company:
@@ -51,7 +52,64 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
             # and would silently show the wrong month's rows.
             _, start_month, end_of_month = strip_date(month)
             qs = qs.filter(action_date__gte=start_month, action_date__lte=end_of_month)
+        # Logically-deleted rows are intentionally NOT excluded here: this
+        # page is the audit trail for them (shown grayed-out on screen), only
+        # totals/PDF/CSV exclude them.
         return qs
+
+    def list(self, request, *args, **kwargs):
+        # Precomputed once so AccountItemSerializer.get_invoice_issued() can
+        # do an O(1) lookup per row instead of a query per row.
+        sent_slugs = set(
+            InvoiceCode.objects.filter(account_item__organization=request.organization, sent_at__isnull=False)
+            .values_list("account_item_slug", flat=True)
+        )
+        qs = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(qs, many=True, context={"request": request, "sent_slugs": sent_slugs})
+        return Response(serializer.data)
+
+    def perform_create(self, serializer):
+        organization = self.request.organization
+        company = serializer.validated_data.get("company")
+        invoice_date = serializer.validated_data.get("invoice_date")
+        invoice_code = calc.find_invoice_code_for_item(organization, company, invoice_date)
+        if invoice_code and invoice_code.sent_at:
+            # Adding a line item to an already-sent invoice is allowed (this
+            # is exactly how you correct one), but the new row must carry
+            # that invoice's existing, frozen issue date - not a new one.
+            serializer.save(organization=organization, invoice_date=invoice_code.account_item.invoice_date)
+            invoice_code.amended = True
+            invoice_code.save(update_fields=["amended"])
+        else:
+            serializer.save(organization=organization)
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        invoice_code = calc.find_invoice_code_for_item(self.request.organization, instance.company, instance.invoice_date)
+        if invoice_code and invoice_code.sent_at:
+            new_date = serializer.validated_data.get("invoice_date", instance.invoice_date)
+            if new_date != instance.invoice_date:
+                raise ValidationError({
+                    "invoice_date": "This invoice has already been sent; its issue date can no longer be changed."
+                })
+            serializer.save()
+            invoice_code.amended = True
+            invoice_code.save(update_fields=["amended"])
+        else:
+            serializer.save()
+
+    def perform_destroy(self, instance):
+        invoice_code = calc.find_invoice_code_for_item(self.request.organization, instance.company, instance.invoice_date)
+        if invoice_code and invoice_code.sent_at:
+            # Logical delete only: the client already has this invoice, so
+            # the row is kept (visible, grayed-out) for audit purposes and
+            # simply excluded from totals/PDF/CSV going forward.
+            instance.deleted_at = timezone.now()
+            instance.save(update_fields=["deleted_at"])
+            invoice_code.amended = True
+            invoice_code.save(update_fields=["amended"])
+        else:
+            instance.delete()
 
     @action(detail=False, methods=["post"], url_path="bulk-update")
     def bulk_update(self, request):
@@ -67,6 +125,7 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
 
         qs = self.get_queryset()
         to_save = []
+        touched_invoice_codes = {}
         errors = []
         for index, row in enumerate(rows):
             item_id = row.get("id")
@@ -78,6 +137,18 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
             if not serializer.is_valid():
                 errors.append({"index": index, "id": item_id, "detail": serializer.errors})
                 continue
+
+            invoice_code = calc.find_invoice_code_for_item(request.organization, instance.company, instance.invoice_date)
+            if invoice_code and invoice_code.sent_at:
+                new_date = serializer.validated_data.get("invoice_date", instance.invoice_date)
+                if new_date != instance.invoice_date:
+                    errors.append({
+                        "index": index, "id": item_id,
+                        "detail": {"invoice_date": "This invoice has already been sent; its issue date can no longer be changed."},
+                    })
+                    continue
+                touched_invoice_codes[invoice_code.id] = invoice_code
+
             to_save.append(serializer)
 
         if errors:
@@ -86,6 +157,8 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
         with transaction.atomic():
             for serializer in to_save:
                 serializer.save()
+            if touched_invoice_codes:
+                InvoiceCode.objects.filter(id__in=touched_invoice_codes.keys()).update(amended=True)
 
         return Response({"updated": len(to_save)})
 
@@ -180,10 +253,37 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
             organization=request.organization,
             action_date__gte=start_of_month,
             action_date__lte=end_of_month,
+            deleted_at__isnull=True,
         )
         st = start_of_month.replace("-", "")[:6]
         ed = end_of_month.replace("-", "")[:6]
         return calc.export_to_csv(qs, st, ed)
+
+    @action(detail=False, methods=["post"], url_path="align-invoice-dates-preview")
+    def align_invoice_dates_preview(self, request):
+        """Read-only: reports what align-invoice-dates would change, without saving anything."""
+        month = request.data.get("month")
+        if not month:
+            return Response({"detail": "month is required (YYYY-MM-DD)."}, status=status.HTTP_400_BAD_REQUEST)
+        company = request.data.get("company", "")
+        changes, skipped_ties = calc.plan_invoice_date_alignment(request.organization, company, month)
+        return Response({"changes": changes, "skipped_ties": skipped_ties})
+
+    @action(detail=False, methods=["post"], url_path="align-invoice-dates")
+    def align_invoice_dates(self, request):
+        """
+        Within each (client, invoice month) group, corrects any line item's
+        invoice_date that disagrees with the date most of that group's rows
+        already use - fixes a stray typo'd day (e.g. one row at 2025-09-15
+        among a period otherwise entered as 2025-09-01) without touching
+        groups that are already consistent or have no clear majority.
+        """
+        month = request.data.get("month")
+        if not month:
+            return Response({"detail": "month is required (YYYY-MM-DD)."}, status=status.HTTP_400_BAD_REQUEST)
+        company = request.data.get("company", "")
+        changes, skipped_ties = calc.apply_invoice_date_alignment(request.organization, company, month)
+        return Response({"changes": changes, "skipped_ties": skipped_ties, "applied": len(changes)})
 
 
 class InvoiceCodeViewSet(OrganizationScopedMixin, viewsets.ReadOnlyModelViewSet):
@@ -195,11 +295,21 @@ class InvoiceCodeViewSet(OrganizationScopedMixin, viewsets.ReadOnlyModelViewSet)
         qs = super().get_queryset().select_related("account_item", "account_item__company").order_by("-payment_due")
         company = self.request.query_params.get("company")
         month = self.request.query_params.get("month")
+        number = self.request.query_params.get("number")
         if company:
             qs = qs.filter(account_item__company_id=company)
         if month:
             _, start_month, end_of_month = strip_date(month)
             qs = qs.filter(account_item__invoice_date__gte=start_month, account_item__invoice_date__lte=end_of_month)
+        if number:
+            number = number.strip()
+            # Matches the human-facing invoice number (invoice_slug), the
+            # internal account-item key (e.g. "acme-202501"), or an exact
+            # numeric id — whichever the user has on hand.
+            lookup = Q(invoice_slug__icontains=number) | Q(account_item_slug__icontains=number)
+            if number.isdigit():
+                lookup |= Q(id=int(number))
+            qs = qs.filter(lookup)
         return qs
 
     def list(self, request, *args, **kwargs):
@@ -212,15 +322,13 @@ class InvoiceCodeViewSet(OrganizationScopedMixin, viewsets.ReadOnlyModelViewSet)
         calc.total_amount_calc(organization)
 
         invoices = list(self.get_queryset())
-        month = request.query_params.get("month")
-        start_month = end_of_month = None
-        if month:
-            _, start_month, end_of_month = strip_date(month)
         for invoice in invoices:
-            items_qs = AccountItem.objects.filter(organization=organization, company=invoice.account_item.company)
-            if start_month:
-                items_qs = items_qs.filter(invoice_date__gte=start_month, invoice_date__lte=end_of_month)
-            invoice.items_for_month = items_qs.order_by("item_code", "-invoice_date")
+            # Scoped by slug (this invoice's own period), not just company -
+            # filtering by company alone (with no month picked) used to leak
+            # every other period's line items onto every invoice's card.
+            invoice.items_for_month = AccountItem.objects.filter(
+                organization=organization, slug=invoice.account_item_slug, deleted_at__isnull=True
+            ).order_by("item_code", "-invoice_date")
 
         serializer = self.get_serializer(invoices, many=True)
         return Response(serializer.data)
