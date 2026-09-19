@@ -190,3 +190,37 @@ class InvoiceCode(models.Model):
     
 class CsvDate(models.Model):
     csvdate = models.DateField(default=date(2024, 9, 1))
+
+class ChangeLog(models.Model):
+    """
+    Append-only audit trail of edits to line items. Nothing here ever feeds
+    totals, PDFs or dumps, and rows are never updated: an edit to an
+    AccountItem overwrites it in place, so this is the only record of what it
+    said before. It deliberately holds copies (client name, invoice key) rather
+    than only foreign keys, so an entry still reads correctly after the line
+    it describes has been deleted.
+    """
+    class Action(models.TextChoices):
+        CREATE = "create", "追加"
+        UPDATE = "update", "変更"
+        VOID = "void", "論理削除"
+        DELETE = "delete", "削除"
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="change_logs")
+    account_item = models.ForeignKey(AccountItem, on_delete=models.SET_NULL, null=True, blank=True, related_name="change_logs")
+    object_id = models.PositiveIntegerField(verbose_name="明細ID")
+    action = models.CharField(max_length=10, choices=Action.choices)
+    source = models.CharField(verbose_name="操作元", max_length=20, blank=True, default="")
+    # {"field": [old, new]}; old is null on create, new is null on delete.
+    changes = models.JSONField(default=dict)
+    client_name = models.CharField(max_length=100, blank=True, default="")
+    invoice_slug = models.CharField(max_length=150, blank=True, default="")
+    # True when the invoice had already been sent: the edit produced/changed a 修正版.
+    after_sent = models.BooleanField(default=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    username = models.CharField(max_length=150, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["organization", "object_id"])]

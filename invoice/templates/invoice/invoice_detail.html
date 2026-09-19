@@ -61,7 +61,17 @@
         margin-bottom: 14px;
     }
 
+    /* Takes whatever width the issuer block leaves and never runs under it;
+       a long client name gets a smaller size (tiers below), then wraps. */
+    .bill-to {
+        flex: 1 1 0;
+        min-width: 0;
+        padding-right: 14px;
+    }
+
     .bill-to .name {
+        max-width: 100%;
+        overflow-wrap: anywhere;
         font-size: 18px;
         font-weight: 700;
         color: #1a1a1a;
@@ -70,8 +80,13 @@
         display: inline-block;
     }
 
+    .bill-to .name.len-m { font-size: 15px; }
+    .bill-to .name.len-l { font-size: 13px; }
+    .bill-to .name.len-xl { font-size: 11.5px; }
+
     .issuer {
         display: flex;
+        flex: 0 0 auto;
         align-items: center;
         justify-content: flex-end;
         gap: 14px;
@@ -295,14 +310,13 @@
     </div>
     <div class="meta">
         請求書番号　{{ invoice_num|format_id }}<br>
-        請求書発行日　{{ invoice_date|japan_day_format }}<br>
-        対象月　{% for month in target_months %}{{ month|japan_month_format }}{% if not forloop.last %}、{% endif %}{% endfor %}
+        請求書発行日　{{ invoice_date|japan_day_format }}
     </div>
 </div>
 
 <div class="parties">
     <div class="bill-to">
-        <span class="name">{{ selected_company }} 御中</span>
+        <span class="name{% if selected_company|length > 30 %} len-xl{% elif selected_company|length > 22 %} len-l{% elif selected_company|length > 16 %} len-m{% endif %}">{{ selected_company }} 御中</span>
     </div>
     <div class="issuer">
         <div class="issuer-text">

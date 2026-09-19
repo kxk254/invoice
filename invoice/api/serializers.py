@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from ..models import AccountItem, Client, InvoiceCode, ItemCode
+from ..models import AccountItem, ChangeLog, Client, InvoiceCode, ItemCode
 
 
 class ClientSerializer(serializers.ModelSerializer):
@@ -60,4 +60,13 @@ class InvoiceCodeSerializer(serializers.ModelSerializer):
             "payment_due", "invoice_bt_ttl_0", "invoice_bt_ttl", "invoice_tax_ttl",
             "invoice_at_ttl", "invoice_bt_gttl", "invoice_at_gttl", "invoice_tax_flag",
             "sent_at", "amended", "tax_rounding", "items",
+        ]
+
+
+class ChangeLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChangeLog
+        fields = [
+            "id", "object_id", "action", "source", "changes", "client_name",
+            "invoice_slug", "after_sent", "username", "created_at",
         ]

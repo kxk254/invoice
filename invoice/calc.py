@@ -1,7 +1,8 @@
 import logging
 import math, csv
 from collections import Counter
-from .models import AccountItem, InvoiceCode, Client
+from . import audit
+from .models import AccountItem, ChangeLog, InvoiceCode, Client
 from django.db.models import Sum
 from datetime import datetime, timedelta
 from django.db import IntegrityError
@@ -211,12 +212,15 @@ This only fixes the per-line figures. Invoice totals (total_amount_calc)
 always re-derive tax once per rate from the summed 税抜 amounts, as the
 qualified-invoice rules require.
 """
-def plan_tax_calc(organization, selected_company="", selected_month=""):
+def plan_tax_calc(organization, selected_company="", selected_month="", date_field="invoice_date"):
+    # The month is matched on 請求日 (Invoices page) or on 該当月 (Line items
+    # page, whose month filter means action_date).
+    if date_field not in ("invoice_date", "action_date"):
+        date_field = "invoice_date"
     _, start_of_month, end_of_month = strip_date(selected_month)
     queryset = AccountItem.objects.filter(
         organization=organization,
-        invoice_date__gte=start_of_month,
-        invoice_date__lte=end_of_month,
+        **{f"{date_field}__gte": start_of_month, f"{date_field}__lte": end_of_month},
         deleted_at__isnull=True,
     ).select_related("company", "item_code").order_by("company__name", "invoice_date", "id")
     if selected_company:
@@ -272,9 +276,9 @@ Changing a row on an invoice that was already sent is allowed (that is how
 you correct one) but flags that invoice as amended (修正版), matching every
 other post-send edit.
 """
-def apply_tax_calc(organization, selected_company="", selected_month="", resolutions=None):
+def apply_tax_calc(organization, selected_company="", selected_month="", resolutions=None, user=None, date_field="invoice_date"):
     resolutions = {str(k): v for k, v in (resolutions or {}).items()}
-    fills, conflicts = plan_tax_calc(organization, selected_company, selected_month)
+    fills, conflicts = plan_tax_calc(organization, selected_company, selected_month, date_field)
 
     updates = {row["id"]: (row, row["after"]) for row in fills}
     unresolved = 0
@@ -289,10 +293,15 @@ def apply_tax_calc(organization, selected_company="", selected_month="", resolut
 
     amended_ids = set()
     with transaction.atomic():
-        for item in AccountItem.objects.filter(organization=organization, id__in=updates.keys()):
+        for item in AccountItem.objects.filter(organization=organization, id__in=updates.keys()).select_related("company", "item_code"):
             row, after = updates[item.id]
+            before_snapshot = audit.snapshot(item)
             item.invoice_bt, item.invoice_tax, item.invoice_at = after["bt"], after["tax"], after["at"]
             item.save(update_fields=["invoice_bt", "invoice_tax", "invoice_at"])
+            audit.record_change(
+                organization, item, ChangeLog.Action.UPDATE, before=before_snapshot, after=audit.snapshot(item),
+                user=user, source="tax-calc", after_sent=bool(row["invoice_sent"]),
+            )
             if row["invoice_sent"] and after != row["current"]:
                 amended_ids.add(row["invoice_id"])
         if amended_ids:

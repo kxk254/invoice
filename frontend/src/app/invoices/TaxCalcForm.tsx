@@ -9,6 +9,7 @@ import {
   type TaxAmounts,
   type TaxCalcConflict,
   type TaxCalcFill,
+  type TaxCalcDateField,
   type TaxCalcResult,
 } from "./actions";
 
@@ -31,7 +32,15 @@ function describe(result: TaxCalcResult) {
   return parts.join(", ") + ".";
 }
 
-export default function TaxCalcForm({ company, month }: { company: string; month: string }) {
+export default function TaxCalcForm({
+  company,
+  month,
+  dateField = "invoice_date",
+}: {
+  company: string;
+  month: string;
+  dateField?: TaxCalcDateField;
+}) {
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
   const [dialog, setDialog] = useState<{ fills: TaxCalcFill[]; conflicts: TaxCalcConflict[] } | null>(null);
@@ -39,7 +48,7 @@ export default function TaxCalcForm({ company, month }: { company: string; month
 
   function apply(resolutions: Record<number, "bt" | "at">) {
     startTransition(async () => {
-      const result = await applyTaxCalc(company, month, resolutions);
+      const result = await applyTaxCalc(company, month, resolutions, dateField);
       setDialog(null);
       setMessage("error" in result ? { text: result.error, error: true } : { text: describe(result) });
     });
@@ -48,13 +57,13 @@ export default function TaxCalcForm({ company, month }: { company: string; month
   function start() {
     setMessage(null);
     startTransition(async () => {
-      const plan = await previewTaxCalc(company, month);
+      const plan = await previewTaxCalc(company, month, dateField);
       if ("error" in plan) {
         setMessage({ text: plan.error, error: true });
         return;
       }
       if (plan.conflicts.length === 0) {
-        const result = await applyTaxCalc(company, month, {});
+        const result = await applyTaxCalc(company, month, {}, dateField);
         setMessage("error" in result ? { text: result.error, error: true } : { text: describe(result) });
         return;
       }

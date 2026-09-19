@@ -8,11 +8,11 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .. import calc, restore_logic
+from .. import audit, calc, restore_logic
 from ..calc import strip_date
-from ..models import AccountItem, Client, InvoiceCode, ItemCode
+from ..models import AccountItem, ChangeLog, Client, InvoiceCode, ItemCode
 from .permissions import OrganizationScopedMixin, get_active_organization
-from .serializers import AccountItemSerializer, ClientSerializer, InvoiceCodeSerializer, ItemCodeSerializer
+from .serializers import AccountItemSerializer, ChangeLogSerializer, ClientSerializer, InvoiceCodeSerializer, ItemCodeSerializer
 
 
 class MeView(APIView):
@@ -32,6 +32,29 @@ class ClientViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
 class ItemCodeViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
     queryset = ItemCode.objects.all()
     serializer_class = ItemCodeSerializer
+
+
+class ChangeLogViewSet(OrganizationScopedMixin, viewsets.ReadOnlyModelViewSet):
+    """Read-only audit trail. Filters: ?item=<line id>, ?invoice=<slug>, ?limit=<n> (default 200)."""
+    queryset = ChangeLog.objects.all()
+    serializer_class = ChangeLogSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        item, invoice = self.request.query_params.get("item"), self.request.query_params.get("invoice")
+        if item:
+            qs = qs.filter(object_id=item)
+        if invoice:
+            qs = qs.filter(invoice_slug=invoice)
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        try:
+            limit = max(1, min(int(request.query_params.get("limit", 200)), 1000))
+        except ValueError:
+            limit = 200
+        return Response(self.get_serializer(self.get_queryset()[:limit], many=True).data)
 
 
 class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
@@ -77,11 +100,15 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
             # Adding a line item to an already-sent invoice is allowed (this
             # is exactly how you correct one), but the new row must carry
             # that invoice's existing, frozen issue date - not a new one.
-            serializer.save(organization=organization, invoice_date=invoice_code.account_item.invoice_date)
+            saved = serializer.save(organization=organization, invoice_date=invoice_code.account_item.invoice_date)
             invoice_code.amended = True
             invoice_code.save(update_fields=["amended"])
         else:
-            serializer.save(organization=organization)
+            saved = serializer.save(organization=organization)
+        audit.record_change(
+            organization, saved, ChangeLog.Action.CREATE, after=audit.snapshot(saved),
+            user=self.request.user, source="edit", after_sent=bool(invoice_code and invoice_code.sent_at),
+        )
 
     def perform_update(self, serializer):
         instance = serializer.instance
@@ -93,6 +120,7 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
         )
         if errors:
             raise ValidationError(errors)
+        before = audit.snapshot(instance)
         with transaction.atomic():
             saved = serializer.save()
             if moves:
@@ -100,6 +128,10 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
             elif old_invoice and old_invoice.sent_at:
                 old_invoice.amended = True
                 old_invoice.save(update_fields=["amended"])
+            audit.record_change(
+                organization, saved, ChangeLog.Action.UPDATE, before=before, after=audit.snapshot(saved),
+                user=self.request.user, source="edit", after_sent=bool(old_invoice and old_invoice.sent_at),
+            )
 
     def perform_destroy(self, instance):
         invoice_code = calc.find_invoice_code_for_item(self.request.organization, instance.company, instance.invoice_date)
@@ -111,7 +143,15 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
             instance.save(update_fields=["deleted_at"])
             invoice_code.amended = True
             invoice_code.save(update_fields=["amended"])
+            audit.record_change(
+                self.request.organization, instance, ChangeLog.Action.VOID, before=audit.snapshot(instance),
+                user=self.request.user, source="edit", after_sent=True,
+            )
         else:
+            audit.record_change(
+                self.request.organization, instance, ChangeLog.Action.DELETE, before=audit.snapshot(instance),
+                user=self.request.user, source="edit",
+            )
             instance.delete()
 
     @action(detail=False, methods=["post"], url_path="bulk-update")
@@ -176,9 +216,14 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
                         {"errors": [{"index": index, "id": item_id, "detail": line_errors}]},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+                before = audit.snapshot(instance)
                 saved = serializer.save()
                 if moves:
                     calc.apply_line_move(request.organization, saved, old_invoice)
+                audit.record_change(
+                    request.organization, saved, ChangeLog.Action.UPDATE, before=before, after=audit.snapshot(saved),
+                    user=request.user, source="bulk", after_sent=bool(old_invoice and old_invoice.sent_at),
+                )
             if touched_invoice_codes:
                 InvoiceCode.objects.filter(id__in=touched_invoice_codes.keys()).update(amended=True)
 
@@ -361,7 +406,7 @@ class InvoiceCodeViewSet(OrganizationScopedMixin, viewsets.ReadOnlyModelViewSet)
         month = request.data.get("month")
         if not month:
             return Response({"detail": "month is required (YYYY-MM-DD)."}, status=status.HTTP_400_BAD_REQUEST)
-        fills, conflicts = calc.plan_tax_calc(request.organization, request.data.get("company", ""), month)
+        fills, conflicts = calc.plan_tax_calc(request.organization, request.data.get("company", ""), month, request.data.get("date_field", "invoice_date"))
         return Response({"fills": fills, "conflicts": conflicts})
 
     @action(detail=False, methods=["post"], url_path="tax-calc")
@@ -377,7 +422,7 @@ class InvoiceCodeViewSet(OrganizationScopedMixin, viewsets.ReadOnlyModelViewSet)
         resolutions = request.data.get("resolutions") or {}
         if not isinstance(resolutions, dict) or any(v not in ("bt", "at") for v in resolutions.values()):
             return Response({"detail": 'resolutions must map item id to "bt" or "at".'}, status=status.HTTP_400_BAD_REQUEST)
-        result = calc.apply_tax_calc(request.organization, request.data.get("company", ""), month, resolutions)
+        result = calc.apply_tax_calc(request.organization, request.data.get("company", ""), month, resolutions, user=request.user, date_field=request.data.get("date_field", "invoice_date"))
         return Response(result)
 
     @action(detail=True, methods=["post"], url_path="mark-sent")

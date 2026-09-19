@@ -71,9 +71,15 @@ export type TaxCalcPlan = { fills: TaxCalcFill[]; conflicts: TaxCalcConflict[] }
 export type TaxCalcResult = { applied: number; unresolved: number; amended_invoices: number };
 export type TaxCalcResolutions = Record<number, "bt" | "at">;
 
-export async function previewTaxCalc(company: string, month: string): Promise<TaxCalcPlan | { error: string }> {
+export type TaxCalcDateField = "invoice_date" | "action_date";
+
+export async function previewTaxCalc(
+  company: string,
+  month: string,
+  dateField: TaxCalcDateField = "invoice_date",
+): Promise<TaxCalcPlan | { error: string }> {
   try {
-    const res = await apiMutate("/invoices/tax-calc-preview/", "POST", { company, month });
+    const res = await apiMutate("/invoices/tax-calc-preview/", "POST", { company, month, date_field: dateField });
     return await res.json();
   } catch (e) {
     return { error: e instanceof ApiError ? e.message : "Request failed." };
@@ -84,9 +90,10 @@ export async function applyTaxCalc(
   company: string,
   month: string,
   resolutions: TaxCalcResolutions,
+  dateField: TaxCalcDateField = "invoice_date",
 ): Promise<TaxCalcResult | { error: string }> {
   try {
-    const res = await apiMutate("/invoices/tax-calc/", "POST", { company, month, resolutions });
+    const res = await apiMutate("/invoices/tax-calc/", "POST", { company, month, resolutions, date_field: dateField });
     const result = await res.json();
     revalidatePath("/invoices");
     revalidatePath("/account-items");

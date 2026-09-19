@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import (
     BankAccount, Client, AccountItem, InvoiceCode, ItemCode, CsvDate,
-    Organization, OrganizationMembership,
+    Organization, OrganizationMembership, ChangeLog,
 )
 
 # Register your models here.
@@ -11,5 +11,6 @@ admin.site.register(AccountItem)
 admin.site.register(InvoiceCode)
 admin.site.register(ItemCode)
 admin.site.register(CsvDate)
+admin.site.register(ChangeLog)
 admin.site.register(Organization)
 admin.site.register(OrganizationMembership)

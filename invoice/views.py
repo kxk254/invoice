@@ -2,7 +2,8 @@ from django.shortcuts import render, redirect
 from django.http import HttpResponseRedirect, HttpResponse
 from django.views.generic import View, ListView, DetailView
 from django.urls import reverse_lazy, reverse
-from .models import AccountItem, Client, InvoiceCode, CsvDate
+from . import audit
+from .models import AccountItem, ChangeLog, Client, InvoiceCode, CsvDate
 from . import calc
 from .calc import strip_date
 from .forms import AccountItemFormSet
@@ -92,8 +93,18 @@ class AccountItemUpdateView(LoginRequiredMixin, View):
             instances = formset.save(commit=False)
             for instance in instances:
                 instance.organization = organization
+                previous = AccountItem.objects.filter(pk=instance.pk, organization=organization).select_related("company", "item_code").first() if instance.pk else None
+                before = audit.snapshot(previous) if previous else None
                 instance.save()
+                if previous:
+                    audit.record_change(organization, instance, ChangeLog.Action.UPDATE, before=before,
+                                        after=audit.snapshot(instance), user=request.user, source="legacy-form")
+                else:
+                    audit.record_change(organization, instance, ChangeLog.Action.CREATE,
+                                        after=audit.snapshot(instance), user=request.user, source="legacy-form")
             for obj in formset.deleted_objects:
+                audit.record_change(organization, obj, ChangeLog.Action.DELETE, before=audit.snapshot(obj),
+                                    user=request.user, source="legacy-form")
                 obj.delete()
             print("formset was saved")
             return HttpResponseRedirect(redirect_url)

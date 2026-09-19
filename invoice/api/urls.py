@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from .views import (
-    AccountItemViewSet, ClientViewSet, ImportView, InvoiceCodeViewSet,
+    AccountItemViewSet, ChangeLogViewSet, ClientViewSet, ImportView, InvoiceCodeViewSet,
     InvoicePdfView, ItemCodeViewSet, MeView, RestoreApplyView, RestorePreviewView,
 )
 
@@ -11,6 +11,7 @@ router = DefaultRouter()
 router.register("clients", ClientViewSet, basename="client")
 router.register("item-codes", ItemCodeViewSet, basename="item-code")
 router.register("account-items", AccountItemViewSet, basename="account-item")
+router.register("change-log", ChangeLogViewSet, basename="change-log")
 router.register("invoices", InvoiceCodeViewSet, basename="invoice")
 
 urlpatterns = [

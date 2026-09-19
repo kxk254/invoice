@@ -100,6 +100,14 @@ export default async function InvoicesPage(props: PageProps<"/invoices">) {
                       )}
                     </td>
                     <td className="whitespace-nowrap p-2 text-right">
+                      <a
+                        href={`/invoices/${invoice.account_item_slug}/pdf`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn-secondary mr-1 px-3 py-1 text-xs"
+                      >
+                        Preview PDF
+                      </a>
                       <form action={invoice.sent_at ? unmarkSentWithId : markSentWithId} className="inline">
                         <button type="submit" className="btn-secondary px-3 py-1 text-xs">
                           {invoice.sent_at ? "未送信に戻す" : "送信済みにする"}

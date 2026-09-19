@@ -4,6 +4,7 @@ import Nav from "@/components/Nav";
 import AccountItemRow, { FieldInputs } from "./AccountItemRow";
 import FilterForm from "./FilterForm";
 import SaveForm from "./SaveForm";
+import TaxCalcForm from "../invoices/TaxCalcForm";
 import { createAccountItem } from "./actions";
 
 // This page's list depends entirely on the `month`/`company` query string;
@@ -56,7 +57,13 @@ export default async function AccountItemsPage(props: PageProps<"/account-items"
       <div className="mx-auto w-full max-w-6xl px-4 py-8">
       <h1 className="mb-6 text-xl font-semibold text-slate-900">Line items</h1>
 
-      <FilterForm clients={clients} company={company} month={month} />
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
+        <FilterForm clients={clients} company={company} month={month} />
+        <div className="flex flex-col items-end gap-1">
+          <TaxCalcForm company={company} month={month ? monthStart(month) : ""} dateField="action_date" />
+          <p className="text-xs text-slate-500">Save your edits first — this works on the saved values.</p>
+        </div>
+      </div>
 
       {!month && (
         <p className="mb-4 text-sm text-slate-500">

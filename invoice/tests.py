@@ -685,6 +685,95 @@ class SentInvoiceIsFrozenEverywhereTests(TaxCalcTestBase):
         self.assertEqual(AccountItem.objects.count(), 1)
 
 
+class ChangeLogTests(SentInvoiceIsFrozenEverywhereTests):
+    # Inherits only the fixture; its inherited tests re-run here, which is harmless.
+    """Edits overwrite a line in place; the change log is the only record of what it said before."""
+
+    def logs(self, **filters):
+        from .models import ChangeLog
+        return ChangeLog.objects.filter(**filters)
+
+    def test_editing_a_line_records_old_and_new_and_who(self):
+        response = self.api.patch(f"/api/v1/account-items/{self.kept.pk}/", {"invoice_bt": 2000}, format="json")
+        self.assertEqual(response.status_code, 200)
+        log = self.logs(object_id=self.kept.pk, action="update").get()
+        self.assertEqual(log.changes["invoice_bt"], [1000, 2000])
+        self.assertNotIn("action_name", log.changes)          # unchanged fields are not logged
+        self.assertEqual(log.username, "u")
+        self.assertTrue(log.after_sent)
+        self.assertEqual(log.client_name, self.client_a.name)
+
+    def test_a_save_that_changes_nothing_logs_nothing(self):
+        self.api.patch(f"/api/v1/account-items/{self.kept.pk}/", {"invoice_bt": 1000}, format="json")
+        self.assertFalse(self.logs().exists())
+
+    def test_bulk_update_logs_each_changed_row(self):
+        response = self.api.post("/api/v1/account-items/bulk-update/", {"items": [{"id": self.kept.pk, "action_name": "renamed"}]}, format="json")
+        self.assertEqual(response.status_code, 200)
+        log = self.logs(source="bulk").get()
+        self.assertEqual(log.changes["action_name"], ["kept", "renamed"])
+
+    def test_voiding_a_line_on_a_sent_invoice_is_logged_and_keeps_its_values(self):
+        self.api.delete(f"/api/v1/account-items/{self.kept.pk}/")
+        log = self.logs(action="void").get()
+        self.assertEqual(log.changes["invoice_bt"], [1000, None])
+
+    def test_a_physically_deleted_line_still_has_its_history(self):
+        InvoiceCode.objects.update(sent_at=None)
+        extra = self.item(bt=10, date="2024-03-01", action_name="extra")   # not the invoice's anchor line
+        pk = extra.pk
+        self.api.delete(f"/api/v1/account-items/{pk}/")
+        self.assertFalse(AccountItem.objects.filter(pk=pk).exists())
+        log = self.logs(object_id=pk, action="delete").get()
+        self.assertEqual(log.changes["action_name"], ["extra", None])
+        self.assertIsNone(log.account_item)
+
+    def test_creating_a_line_is_logged(self):
+        row = {"company": self.client_a.pk, "item_code": self.item_code.pk, "invoice_date": "2024-03-01",
+               "action_date": "2024-03-01", "action_name": "added", "invoice_bt": 50}
+        created = self.api.post("/api/v1/account-items/", row, format="json")
+        self.assertEqual(created.status_code, 201)
+        log = self.logs(action="create").get()
+        self.assertEqual(log.changes["invoice_bt"], [None, 50])
+
+    def test_tax_calc_changes_are_logged(self):
+        AccountItem.objects.filter(pk=self.kept.pk).update(invoice_at=0, invoice_tax=0)
+        calc.apply_tax_calc(self.org, "", "2024-03-01", user=None)
+        log = self.logs(source="tax-calc").get()
+        self.assertEqual(log.changes["invoice_at"], [0, 1100])
+
+    def test_history_endpoint_is_scoped_and_filterable(self):
+        self.api.patch(f"/api/v1/account-items/{self.kept.pk}/", {"invoice_bt": 2000}, format="json")
+        data = self.api.get(f"/api/v1/change-log/?item={self.kept.pk}").data
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["changes"]["invoice_bt"], [1000, 2000])
+        other = Organization.objects.create(name="Other", slug="other")
+        from .models import ChangeLog
+        ChangeLog.objects.create(organization=other, object_id=1, action="update", changes={"x": [1, 2]})
+        self.assertEqual(len(self.api.get("/api/v1/change-log/").data), 1)
+
+    def test_restoring_an_old_dump_writes_no_change_log(self):
+        rows = RestoreIdCollisionTests.backup_rows(self, item_pk=900)
+        restore_logic.build_restore_plan(self.org, rows).apply()
+        self.assertFalse(self.logs().exists())
+
+
+class TaxCalcDateFieldTests(TaxCalcTestBase):
+    def test_line_items_page_matches_on_action_date_not_invoice_date(self):
+        line = self.item(bt=1000, date="2024-03-01", action_name="x")
+        AccountItem.objects.filter(pk=line.pk).update(action_date=datetime.date(2024, 2, 1), invoice_at=0)
+        by_invoice, _ = calc.plan_tax_calc(self.org, "", "2024-02-01")
+        by_action, _ = calc.plan_tax_calc(self.org, "", "2024-02-01", "action_date")
+        self.assertEqual(len(by_invoice), 0)
+        self.assertEqual([r["id"] for r in by_action], [line.pk])
+
+    def test_unknown_date_field_falls_back_to_invoice_date(self):
+        line = self.item(bt=1000, date="2024-03-01", action_name="x")
+        AccountItem.objects.filter(pk=line.pk).update(invoice_at=0)
+        fills, _ = calc.plan_tax_calc(self.org, "", "2024-03-01", "id; drop")
+        self.assertEqual(len(fills), 1)
+
+
 class RestoreToleratesOldDumpsTests(TaxCalcTestBase):
     def test_fields_that_no_longer_exist_in_the_model_are_ignored(self):
         rows = RestoreIdCollisionTests.backup_rows(self, item_pk=900)
@@ -869,6 +958,9 @@ class InvoicePdfShowsEachLinesTargetMonthTests(TaxCalcTestBase):
         self.assertLess(html.index("<th>品目</th>"), html.index("<th>対象月</th>"))
         self.assertLess(html.index("<th>対象月</th>"), html.index("<th>内容・摘要</th>"))
 
-    def test_header_lists_every_month_that_appears(self):
+    def test_header_no_longer_repeats_the_target_month(self):
+        # 対象月 is shown once per line in the table; the header only has number + issue date.
         html = self.html_for((100, "2026-07-01", "a", ""), (200, "2026-06-01", "b", ""))
-        self.assertIn("対象月　2026年6月分、2026年7月分", html)
+        self.assertNotIn("対象月　", html)
+        self.assertIn("2026年6月分", html)
+        self.assertIn("2026年7月分", html)
