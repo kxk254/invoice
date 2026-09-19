@@ -1,21 +1,38 @@
 """
-Full, per-organization restore from a Django `dumpdata` JSON backup (the
+Add-only, per-organization restore from a Django `dumpdata` JSON backup (the
 same format already produced by backup_logic.dump_postgres_to_json_to_nas
 and by `python manage.py dumpdata`).
 
-Unlike the old `restore_view` (which did a global `flush` + `loaddata` and
-therefore wiped every organization and every user), this only ever reads or
-writes the rows that belong to ONE organization, matched by `slug` rather
-than by raw id (backup and live ids only line up if it's the same install
-lineage, and matching by slug catches it if they ever don't). Auth/
-membership rows (User, OrganizationMembership) are never part of the
-restorable set - who has access to an organization is never something a
-data restore should be able to change.
+It only ever ADDS what the backup has and the live database doesn't. Rows
+already live are left exactly as they are and nothing is updated or deleted,
+so restoring an old dump can never overwrite or remove newer data - including
+invoices already sent. The organization's own profile is never touched.
+
+"Already live" is decided by what a row IS, not by its id: ids drift between a
+backup and the live database (e.g. after a repair that renumbered rows), so
+the same id can hold a different record on each side. Per model:
+
+  bank account  name + branch + account number
+  item code     slug
+  client        slug (or name)
+  line item     client, item code, invoice/action dates, name, note, amount, tax
+                rate - the same key the Import screen uses to spot duplicates,
+                so identical lines count as one (including repeats inside the
+                backup itself, e.g. one taken before the triplication repair)
+  invoice       account_item_slug (unique per client + month)
+
+A line whose client + month already has a SENT invoice is never added (reported
+as `skipped_sent`): that would change the total of a document the client holds.
+
+A row that isn't live is created at its backup id when that id is free, and
+otherwise at a new id; everything that points at it (line item -> client/item
+code, invoice -> line item) follows. Invoice numbers embed the invoice's own id,
+so one only changes in the rare case its id is already taken by another invoice
+- that is reported as `renumbered`.
 
 Two-step by design: `build_restore_plan` + `RestorePlan.diff()` is entirely
-read-only and safe to call as often as you like; `RestorePlan.apply()` is
-the only thing that writes, and refuses to write anything at all if it
-finds a single pk conflicting with another organization's data.
+read-only and safe to call as often as you like; `RestorePlan.apply()` is the
+only thing that writes, and it runs the exact same resolution as diff().
 
 A backup taken before migration 0026 also predates `RenameModel(Company ->
 Client)`, so its rows are still labelled `invoice.company` - `_index_by_model`
@@ -24,12 +41,18 @@ like a same-name one, both here and in the legacy (pre-multitenancy) branch
 of `build_restore_plan`.
 """
 import json
-from dataclasses import dataclass, field
+import sqlite3
+import tempfile
+import zipfile
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 
 from django.core.management.color import no_style
 from django.core.serializers import deserialize
 from django.db import connections, transaction
 
+from . import calc
 from .models import AccountItem, BankAccount, Client, InvoiceCode, ItemCode, Organization
 
 
@@ -41,6 +64,8 @@ class RestoreError(Exception):
 # migration. Only `Company` has ever been renamed (see 0026); add here if
 # that ever happens again.
 LEGACY_MODEL_ALIASES = {"invoice.company": "invoice.client"}
+
+LEGACY_DEFAULT_SLUG = "default"
 
 
 def _fields_for(row):
@@ -55,37 +80,15 @@ def _index_by_model(fixture_rows):
     return by_model
 
 
-def _model_conflicts(Model, rows, organization, org_field="organization"):
-    """pks in `rows` that already exist live under a DIFFERENT organization."""
-    conflicts = []
-    for row in rows:
-        obj = Model.objects.filter(pk=row["pk"]).exclude(**{org_field: organization}).first()
-        if obj is not None:
-            conflicts.append({"model": Model._meta.label_lower, "pk": row["pk"]})
-    return conflicts
+def _iso(value):
+    return value.isoformat() if hasattr(value, "isoformat") else value
 
 
-def _bank_account_conflicts(rows, organization):
-    conflicts = []
-    for row in rows:
-        pk = row["pk"]
-        if not BankAccount.objects.filter(pk=pk).exists():
-            continue
-        used_elsewhere = (
-            Client.objects.filter(bank_account_id=pk).exclude(organization=organization).exists()
-            or Organization.objects.exclude(pk=organization.pk).filter(bank_account_id=pk).exists()
-        )
-        if used_elsewhere:
-            conflicts.append({"model": "invoice.bankaccount", "pk": pk})
-    return conflicts
+class _Report:
+    """Per-model outcome, keyed by the backup's own ids."""
 
-
-@dataclass
-class ModelChange:
-    label: str
-    create: list = field(default_factory=list)   # pks
-    update: list = field(default_factory=list)   # pks (already exist for this org)
-    delete: list = field(default_factory=list)   # pks (live for this org, absent from backup)
+    def __init__(self):
+        self.create, self.kept, self.renumbered, self.skipped_sent, self.skipped_partial = [], [], [], [], []
 
 
 @dataclass
@@ -100,123 +103,235 @@ class RestorePlan:
     invoice_code_rows: list
 
     def conflicts(self):
-        return (
-            _bank_account_conflicts(self.bank_account_rows, self.organization)
-            + _model_conflicts(ItemCode, self.item_code_rows, self.organization)
-            + _model_conflicts(Client, self.client_rows, self.organization)
-            + _model_conflicts(AccountItem, self.account_item_rows, self.organization)
-            + _model_conflicts(InvoiceCode, self.invoice_code_rows, self.organization, org_field="account_item__organization")
-        )
+        # Kept for the API shape. Ids that collide with another organization's
+        # rows used to block a restore; nothing is written at a colliding id
+        # any more (the row simply gets a new one), so there is nothing to block.
+        return []
 
-    def _change_for(self, Model, rows, org_filter_kwargs, label):
-        backup_pks = {row["pk"] for row in rows}
-        live_pks = set(Model.objects.filter(**org_filter_kwargs).values_list("pk", flat=True))
-        return ModelChange(
-            label=label,
-            create=sorted(backup_pks - live_pks),
-            update=sorted(backup_pks & live_pks),
-            delete=sorted(live_pks - backup_pks),
-        )
+    def _account_item_default_tax_rate(self):
+        """A backup taken before tax_rate existed (migration 0032) has no rate
+        on any line; migration 0033 set 無税 (slug NT) items to 0% and left
+        the rest at the 10% default - reproduce that for rows created here."""
+        slug_by_pk = {r["pk"]: _fields_for(r).get("slug") for r in self.item_code_rows}
+        slug_by_pk.update(ItemCode.objects.filter(organization=self.organization).values_list("pk", "slug"))
+        return lambda fields: fields.get("tax_rate", 0 if slug_by_pk.get(fields.get("item_code")) == "NT" else 10)
 
-    def diff(self):
-        """Read-only summary of what apply() would do. Never writes."""
-        return {
-            # The live Organization row is always updated in place (matched
-            # by slug already), never created or deleted by a restore. A
-            # legacy (pre-multitenancy) backup has no organization fields to
-            # restore at all, so its own profile is left untouched.
-            "organization": {
-                "label": "invoice.organization",
-                "create": [],
-                "update": [self.organization.pk] if self.organization_row is not None else [],
-                "delete": [],
-            },
-            "bank_account": [row["pk"] for row in self.bank_account_rows],
-            "item_code": self._change_for(ItemCode, self.item_code_rows, {"organization": self.organization}, "invoice.itemcode").__dict__,
-            "client": self._change_for(Client, self.client_rows, {"organization": self.organization}, "invoice.client").__dict__,
-            "account_item": self._change_for(AccountItem, self.account_item_rows, {"organization": self.organization}, "invoice.accountitem").__dict__,
-            "invoice_code": self._change_for(
-                InvoiceCode, self.invoice_code_rows, {"account_item__organization": self.organization}, "invoice.invoicecode"
-            ).__dict__,
-        }
+    def _run(self, write, decisions=None):
+        """
+        Resolves every backup row against the live database and (if `write`)
+        creates the missing ones. diff() and apply() both go through here, so
+        a preview is exactly what an apply does.
 
-    def apply(self):
-        conflicts = self.conflicts()
-        if conflicts:
-            raise RestoreError(
-                "Refusing to restore: some rows in this backup share an id with another "
-                "organization's data. Nothing was changed. Conflicts: " + json.dumps(conflicts)
-            )
+        `decisions` maps a period (client slug + month, e.g. "acme-202509") to
+        "add" or "skip" for periods that already have some lines live: with
+        "add" the backup's missing lines are added to that (unsent) invoice,
+        anything else - the default - leaves the period alone. Returns
+        (reports, periods) where `periods` describes every period that needed
+        a decision or was frozen because its invoice was sent.
+        """
+        decisions = decisions or {}
+        org = self.organization
+        reports = {key: _Report() for key in ("bank_account", "item_code", "client", "account_item", "invoice_code")}
 
-        # However the backup's own `organization` field compares to the live
-        # org's pk (they needn't match - that's the whole point of matching
-        # by slug, and a legacy backup has no such field at all), every row
-        # restored here unambiguously belongs to this live organization.
-        force_org = {"organization": self.organization.pk}
+        def create(Model, row, fields, report, prefer_dump_pk=True):
+            taken = taken_pks[Model]
+            target = row["pk"] if prefer_dump_pk and row["pk"] not in taken else None
+            report.create.append(row["pk"])
+            if target is None:
+                report.renumbered.append(row["pk"])
+            if not write:
+                # A preview can't know an auto-assigned id; a placeholder that
+                # can never equal a live id is enough for matching later rows.
+                new_pk = target if target is not None else ("new", Model.__name__, row["pk"])
+            else:
+                payload = [{"model": Model._meta.label_lower, "pk": target, "fields": fields}]
+                (deserialized,) = list(deserialize("json", json.dumps(payload), ignorenonexistent=True))
+                deserialized.save()
+                new_pk = deserialized.object.pk
+            taken.add(new_pk)
+            return new_pk
 
-        with transaction.atomic():
-            # 1) Upsert everything the backup says should exist, in FK order,
-            #    using the backup's own pks (so invoice numbers, which are
-            #    derived from InvoiceCode's own id, come back unchanged).
-            _upsert_rows(BankAccount, self.bank_account_rows)
-            if self.organization_row is not None:
-                _apply_organization_fields(self.organization, _fields_for(self.organization_row))
-            _upsert_rows(ItemCode, self.item_code_rows, force_fields=force_org)
-            _upsert_rows(Client, self.client_rows, force_fields=force_org)
-            _upsert_rows(AccountItem, self.account_item_rows, force_fields=force_org)
-            # Repoints InvoiceCode.account_item back to the backup's original
-            # target *before* anything not in the backup gets deleted below,
-            # which is what keeps the PROTECT constraint from ever firing.
-            _upsert_rows(InvoiceCode, self.invoice_code_rows)
+        taken_pks = {M: set(M.objects.values_list("pk", flat=True)) for M in (BankAccount, ItemCode, Client, AccountItem, InvoiceCode)}
 
-            # 2) Now remove anything that exists live for this org but isn't
-            #    in the backup, in reverse FK order.
-            invoice_code_delete = InvoiceCode.objects.filter(
-                account_item__organization=self.organization
-            ).exclude(pk__in=[r["pk"] for r in self.invoice_code_rows])
-            invoice_code_deleted = invoice_code_delete.count()
-            invoice_code_delete.delete()
+        # --- bank accounts (global rows; identity = name + branch + number)
+        live_bank = {(b.name, b.branch_code, b.account_number): b.pk for b in BankAccount.objects.all()}
+        bank_map = {}
+        for row in self.bank_account_rows:
+            f = _fields_for(row)
+            key = (f.get("name"), f.get("branch_code"), f.get("account_number"))
+            if key in live_bank:
+                bank_map[row["pk"]] = live_bank[key]
+                reports["bank_account"].kept.append(row["pk"])
+            else:
+                bank_map[row["pk"]] = live_bank[key] = create(BankAccount, row, dict(f), reports["bank_account"])
 
-            account_item_delete = AccountItem.objects.filter(organization=self.organization).exclude(
-                pk__in=[r["pk"] for r in self.account_item_rows]
-            )
-            account_item_deleted = account_item_delete.count()
-            account_item_delete.delete()
+        # --- item codes (identity = slug)
+        live_codes = {i.slug: i.pk for i in ItemCode.objects.filter(organization=org)}
+        item_code_map = {}
+        for row in self.item_code_rows:
+            f = _fields_for(row)
+            if f.get("slug") in live_codes:
+                item_code_map[row["pk"]] = live_codes[f["slug"]]
+                reports["item_code"].kept.append(row["pk"])
+            else:
+                fields = {**f, "organization": org.pk}
+                item_code_map[row["pk"]] = live_codes[f.get("slug")] = create(ItemCode, row, fields, reports["item_code"])
 
-            client_delete = Client.objects.filter(organization=self.organization).exclude(
-                pk__in=[r["pk"] for r in self.client_rows]
-            )
-            client_deleted = client_delete.count()
-            client_delete.delete()
+        # --- clients (identity = slug, else name)
+        def client_key(f):
+            return f.get("slug") or f"name:{f.get('name')}"
+        live_clients = {client_key({"slug": c.slug, "name": c.name}): c.pk for c in Client.objects.filter(organization=org)}
+        client_map = {}
+        for row in self.client_rows:
+            f = _fields_for(row)
+            key = client_key(f)
+            if key in live_clients:
+                client_map[row["pk"]] = live_clients[key]
+                reports["client"].kept.append(row["pk"])
+            else:
+                fields = {**f, "organization": org.pk}
+                if "bank_account" in f:
+                    fields["bank_account"] = bank_map.get(f["bank_account"], f["bank_account"])
+                client_map[row["pk"]] = live_clients[key] = create(Client, row, fields, reports["client"])
 
-            item_code_delete = ItemCode.objects.filter(organization=self.organization).exclude(
-                pk__in=[r["pk"] for r in self.item_code_rows]
-            )
-            item_code_deleted = item_code_delete.count()
-            item_code_delete.delete()
+        # --- line items (identity = what a person entered)
+        default_tax_rate = self._account_item_default_tax_rate()
 
-            # 3) Explicit pks were just inserted directly - on backends with
-            #    a real sequence (Postgres) that sequence hasn't advanced,
-            #    so the next auto-assigned id could collide with one we just
-            #    restored. No-op on SQLite (nextval tracks max(rowid) already).
+        # A period whose invoice has already been sent is frozen: adding a line
+        # to it would change the total of a document the client already holds.
+        invoices_by_period = calc.invoice_codes_by_period(org)
+        client_slug = {c.pk: c.slug for c in Client.objects.filter(organization=org)}
+        client_name = {c.pk: c.name for c in Client.objects.filter(organization=org)}
+        for row in self.client_rows:
+            live_pk = client_map.get(row["pk"])
+            if live_pk is not None:
+                client_slug.setdefault(live_pk, _fields_for(row).get("slug"))
+                client_name.setdefault(live_pk, _fields_for(row).get("name"))
+
+        def item_key(company, item_code, f, tax_rate):
+            return (company, item_code, f.get("invoice_date"), f.get("action_date"),
+                    f.get("action_name") or "", f.get("action_note") or "", f.get("invoice_bt", 0), tax_rate)
+
+        live_items = {}
+        live_period_lines = {}
+        for a in AccountItem.objects.filter(organization=org).order_by("pk"):
+            key = item_key(a.company_id, a.item_code_id,
+                           {"invoice_date": _iso(a.invoice_date), "action_date": _iso(a.action_date),
+                            "action_name": a.action_name, "action_note": a.action_note, "invoice_bt": a.invoice_bt},
+                           a.tax_rate)
+            live_items.setdefault(key, a.pk)
+            if a.invoice_date:
+                pk_ym = (a.company_id, a.invoice_date.strftime("%Y-%m"))
+                live_period_lines[pk_ym] = live_period_lines.get(pk_ym, 0) + 1
+
+        periods = {}
+
+        def period_entry(slug, company, sent, live_lines):
+            return periods.setdefault(slug, {
+                "period": slug, "company_name": client_name.get(company), "sent": sent,
+                "live_lines": live_lines, "lines": [], "decision": None,
+            })
+
+        item_map = {}
+        left_out_keys = set()   # lines not added (period sent / not chosen): a repeat of one is the same line, not another
+        for row in self.account_item_rows:
+            f = _fields_for(row)
+            company = client_map.get(f.get("company"), f.get("company"))
+            item_code = item_code_map.get(f.get("item_code"), f.get("item_code"))
+            tax_rate = default_tax_rate(f)
+            key = item_key(company, item_code, f, tax_rate)
+            invoice_date = f.get("invoice_date")
+            ym = invoice_date[:7] if invoice_date else None
+            period = f"{client_slug.get(company)}-{ym.replace('-', '')}" if ym else None
+            live_lines = live_period_lines.get((company, ym), 0)
+            line_info = {"invoice_date": invoice_date, "action_name": f.get("action_name") or "", "invoice_bt": f.get("invoice_bt", 0)}
+
+            if key in live_items:
+                item_map[row["pk"]] = live_items[key]
+                reports["account_item"].kept.append(row["pk"])
+                continue
+            if key in left_out_keys:
+                reports["account_item"].kept.append(row["pk"])
+                continue
+            live_invoice = invoices_by_period.get((company, ym))
+            if live_invoice is not None and live_invoice.sent_at:
+                left_out_keys.add(key)
+                period_entry(period, company, True, live_lines)["lines"].append(line_info)
+                reports["account_item"].skipped_sent.append(row["pk"])
+                continue
+
+            fields = {"tax_rate": tax_rate, **f, "organization": org.pk, "company": company, "item_code": item_code}
+            if live_lines:
+                # Some of this period is already live: only add the rest if asked to.
+                entry = period_entry(period, company, False, live_lines)
+                entry["lines"].append(line_info)
+                entry["decision"] = "add" if decisions.get(period) == "add" else "skip"
+                if entry["decision"] != "add":
+                    left_out_keys.add(key)
+                    reports["account_item"].skipped_partial.append(row["pk"])
+                    continue
+                # Join the invoice that already exists for the period, so it is counted in its total.
+                fields["slug"] = live_invoice.account_item_slug if live_invoice else None
+                fields["flag"] = live_invoice is not None
+            item_map[row["pk"]] = live_items[key] = create(AccountItem, row, fields, reports["account_item"])
+
+        # --- invoices (identity = account_item_slug, which is unique)
+        live_slugs = set(InvoiceCode.objects.values_list("account_item_slug", flat=True))
+        for row in self.invoice_code_rows:
+            f = _fields_for(row)
+            if f.get("account_item_slug") in live_slugs or f.get("account_item") not in item_map:
+                reports["invoice_code"].kept.append(row["pk"])
+                continue
+            # Every invoice in a backup that predates tax_rounding was totalled
+            # with 切捨て; stamp that so restoring it can't re-round its totals.
+            fields = {"tax_rounding": "floor", **f, "account_item": item_map[f["account_item"]]}
+            create(InvoiceCode, row, fields, reports["invoice_code"])
+            live_slugs.add(f["account_item_slug"])
+
+        if write:
+            # Explicit pks were inserted directly - on backends with a real
+            # sequence (Postgres) that sequence hasn't advanced, so the next
+            # auto-assigned id could collide with one we just added. No-op on SQLite.
             _reset_sequences([BankAccount, ItemCode, Client, AccountItem, InvoiceCode])
+        return reports, sorted(periods.values(), key=lambda p: p["period"])
 
+    def diff(self, decisions=None):
+        """Read-only summary of what apply() would do. Never writes."""
+        reports, _ = self._run(write=False, decisions=decisions)
         return {
-            "bank_account": len(self.bank_account_rows),
-            "item_code": len(self.item_code_rows),
-            "client": len(self.client_rows),
-            "account_item": len(self.account_item_rows),
-            "invoice_code": len(self.invoice_code_rows),
-            "deleted": {
-                "invoice_code": invoice_code_deleted,
-                "account_item": account_item_deleted,
-                "client": client_deleted,
-                "item_code": item_code_deleted,
-            },
+            key: {"label": f"invoice.{key.replace('_', '')}", "create": sorted(r.create), "kept": sorted(r.kept), "remapped": len(r.renumbered),
+                  "skipped_sent": len(r.skipped_sent), "skipped_partial": len(r.skipped_partial)}
+            for key, r in reports.items()
         }
 
+    def periods(self, decisions=None):
+        """Periods that need a decision (some lines already live) or are frozen (invoice sent)."""
+        return self._run(write=False, decisions=decisions)[1]
 
-LEGACY_DEFAULT_SLUG = "default"
+    def apply(self, decisions=None):
+        """
+        Adds what's missing (see module docstring). Nothing live is changed -
+        and that is checked, not assumed: every row that existed before must be
+        byte-for-byte the same afterwards, otherwise the whole restore is
+        rolled back (it all runs in one transaction) and nothing is written.
+        """
+        before = _snapshot()
+        with transaction.atomic():
+            reports, _ = self._run(write=True, decisions=decisions)
+            after = _snapshot()
+            damaged = sorted(str(k) for k, v in before.items() if after.get(k) != v)
+            if damaged:
+                raise RestoreError(
+                    f"Safety check failed: {len(damaged)} existing row(s) would have been changed or removed "
+                    f"(e.g. {damaged[:3]}). Nothing was written."
+                )
+        return {
+            "added": {k: len(r.create) for k, r in reports.items()},
+            "kept": {k: len(r.kept) for k, r in reports.items()},
+            "renumbered": {k: len(r.renumbered) for k, r in reports.items()},
+            "skipped_sent": {k: len(r.skipped_sent) for k, r in reports.items()},
+            "skipped_partial": {k: len(r.skipped_partial) for k, r in reports.items()},
+        }
 
 
 def build_restore_plan(organization, fixture_rows):
@@ -272,70 +387,48 @@ def build_restore_plan(organization, fixture_rows):
     )
 
 
-def _set_field(instance, name, value):
-    model_field = instance._meta.get_field(name)
-    if model_field.is_relation:
-        setattr(instance, model_field.attname, value)
-    else:
-        setattr(instance, name, model_field.to_python(value) if value is not None else None)
+def _snapshot():
+    """Every row of every table a restore may touch, for before/after comparison."""
+    return {
+        (M.__name__, row["id"]): repr(sorted(row.items()))
+        for M in (BankAccount, ItemCode, Client, AccountItem, InvoiceCode)
+        for row in M.objects.values()
+    }
 
 
-def _upsert_rows(Model, rows, force_fields=None):
+def _zip_sqlite(db_path, dest_dir, label="pre-restore"):
+    """Consistent copy of a SQLite file (via SQLite's own backup API, safe
+    while the app is running) into <dest_dir>/<label>-<timestamp>.zip."""
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    zip_path = dest_dir / f"{label}-{stamp}.zip"
+    with tempfile.TemporaryDirectory() as tmp:
+        copy_path = Path(tmp) / f"db.sqlite3.{label}-{stamp}"
+        src = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        dst = sqlite3.connect(copy_path)
+        with dst:
+            src.backup(dst)
+        src.close(); dst.close()
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(copy_path, copy_path.name)
+    return zip_path
+
+
+def backup_database_file():
     """
-    Create-or-update each row at its own backup pk.
-
-    A row that doesn't exist live yet is built fresh from exactly the given
-    fields, via Django's own fixture deserializer (so date/FK type coercion
-    matches `loaddata`) - anything the backup doesn't specify falls back to
-    this model's normal field defaults, same as any new row always would.
-
-    A row that already exists live only has the fields the backup actually
-    specifies overwritten, applied to the *existing* instance. This matters
-    because a backup can predate a schema change (e.g. a field added by a
-    later migration): naively overwriting every field, including ones the
-    old backup never had, would silently reset them to a default on a row
-    that already carries a real value - restoring old data must never be
-    able to erase newer data.
-
-    `force_fields` (e.g. {"organization": <pk>}) is applied on top of both
-    paths - used to attribute every row to the live organization even when
-    the backup has no `organization` field at all (a pre-multitenancy
-    backup) or that field disagrees with the live org's own pk.
+    Safety copy taken right before a restore is applied. Returns the zip's
+    path, or None when there is no local file to copy (in-memory, or a
+    server database such as Postgres - that one is covered by the existing
+    NAS dump instead).
     """
-    if not rows:
-        return
-    force_fields = force_fields or {}
-    live_by_pk = {obj.pk: obj for obj in Model.objects.filter(pk__in=[r["pk"] for r in rows])}
-
-    to_create = []
-    for row in rows:
-        pk = row["pk"]
-        if pk in live_by_pk:
-            obj = live_by_pk[pk]
-            for name, value in row["fields"].items():
-                _set_field(obj, name, value)
-            for name, value in force_fields.items():
-                _set_field(obj, name, value)
-            obj.save()
-        else:
-            to_create.append({**row, "fields": {**row["fields"], **force_fields}})
-
-    for deserialized in deserialize("json", json.dumps(to_create)):
-        deserialized.save()
-
-
-def _apply_organization_fields(organization, backup_fields):
-    """The live Organization row is never replaced (its pk is what every
-    other table already points to) - just its own fields are overwritten
-    from the backup, skipping the id and anything that isn't a plain field
-    on this model (e.g. reverse relations don't appear in `fields` anyway)."""
-    for name, value in backup_fields.items():
-        model_field = Organization._meta.get_field(name)
-        if model_field.is_relation:
-            setattr(organization, model_field.attname, value)
-        else:
-            setattr(organization, name, model_field.to_python(value) if value is not None else None)
-    organization.save()
+    settings_db = connections["default"].settings_dict
+    if settings_db["ENGINE"] != "django.db.backends.sqlite3" or str(settings_db["NAME"]) in ("", ":memory:"):
+        return None
+    db_path = Path(settings_db["NAME"])
+    if not db_path.exists():
+        return None
+    return _zip_sqlite(db_path, db_path.parent / "backups")
 
 
 def _reset_sequences(models):

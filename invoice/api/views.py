@@ -85,18 +85,21 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         instance = serializer.instance
-        invoice_code = calc.find_invoice_code_for_item(self.request.organization, instance.company, instance.invoice_date)
-        if invoice_code and invoice_code.sent_at:
-            new_date = serializer.validated_data.get("invoice_date", instance.invoice_date)
-            if new_date != instance.invoice_date:
-                raise ValidationError({
-                    "invoice_date": "This invoice has already been sent; its issue date can no longer be changed."
-                })
-            serializer.save()
-            invoice_code.amended = True
-            invoice_code.save(update_fields=["amended"])
-        else:
-            serializer.save()
+        organization = self.request.organization
+        errors, moves, old_invoice = calc.plan_line_move(
+            organization, instance,
+            serializer.validated_data.get("company", instance.company),
+            serializer.validated_data.get("invoice_date", instance.invoice_date),
+        )
+        if errors:
+            raise ValidationError(errors)
+        with transaction.atomic():
+            saved = serializer.save()
+            if moves:
+                calc.apply_line_move(organization, saved, old_invoice)
+            elif old_invoice and old_invoice.sent_at:
+                old_invoice.amended = True
+                old_invoice.save(update_fields=["amended"])
 
     def perform_destroy(self, instance):
         invoice_code = calc.find_invoice_code_for_item(self.request.organization, instance.company, instance.invoice_date)
@@ -126,6 +129,7 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
         qs = self.get_queryset()
         to_save = []
         touched_invoice_codes = {}
+        invoices_by_period = calc.invoice_codes_by_period(request.organization)
         errors = []
         for index, row in enumerate(rows):
             item_id = row.get("id")
@@ -138,25 +142,43 @@ class AccountItemViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
                 errors.append({"index": index, "id": item_id, "detail": serializer.errors})
                 continue
 
-            invoice_code = calc.find_invoice_code_for_item(request.organization, instance.company, instance.invoice_date)
-            if invoice_code and invoice_code.sent_at:
-                new_date = serializer.validated_data.get("invoice_date", instance.invoice_date)
-                if new_date != instance.invoice_date:
-                    errors.append({
-                        "index": index, "id": item_id,
-                        "detail": {"invoice_date": "This invoice has already been sent; its issue date can no longer be changed."},
-                    })
-                    continue
-                touched_invoice_codes[invoice_code.id] = invoice_code
+            line_errors, moves, old_invoice = calc.plan_line_move(
+                request.organization, instance,
+                serializer.validated_data.get("company", instance.company),
+                serializer.validated_data.get("invoice_date", instance.invoice_date),
+                invoices_by_period,
+            )
+            if line_errors:
+                errors.append({"index": index, "id": item_id, "detail": line_errors})
+                continue
+            if not moves and old_invoice and old_invoice.sent_at:
+                touched_invoice_codes[old_invoice.id] = old_invoice
 
-            to_save.append(serializer)
+            to_save.append((index, item_id, serializer))
 
         if errors:
             return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
-            for serializer in to_save:
-                serializer.save()
+            for index, item_id, serializer in to_save:
+                # Re-planned against the state left by the rows saved before it: a
+                # move that looked fine alone can leave an invoice empty once its
+                # sibling lines have moved too. Any refusal undoes the whole save.
+                instance = serializer.instance
+                line_errors, moves, old_invoice = calc.plan_line_move(
+                    request.organization, instance,
+                    serializer.validated_data.get("company", instance.company),
+                    serializer.validated_data.get("invoice_date", instance.invoice_date),
+                )
+                if line_errors:
+                    transaction.set_rollback(True)
+                    return Response(
+                        {"errors": [{"index": index, "id": item_id, "detail": line_errors}]},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                saved = serializer.save()
+                if moves:
+                    calc.apply_line_move(request.organization, saved, old_invoice)
             if touched_invoice_codes:
                 InvoiceCode.objects.filter(id__in=touched_invoice_codes.keys()).update(amended=True)
 
@@ -333,27 +355,47 @@ class InvoiceCodeViewSet(OrganizationScopedMixin, viewsets.ReadOnlyModelViewSet)
         serializer = self.get_serializer(invoices, many=True)
         return Response(serializer.data)
 
-    @action(detail=False, methods=["post"], url_path="tax-calc")
-    def tax_calc(self, request):
-        company = request.data.get("company", "")
+    @action(detail=False, methods=["post"], url_path="tax-calc-preview")
+    def tax_calc_preview(self, request):
+        """Read-only: rows that would be filled in, plus rows whose 税抜/税込 amounts disagree and need a decision."""
         month = request.data.get("month")
         if not month:
             return Response({"detail": "month is required (YYYY-MM-DD)."}, status=status.HTTP_400_BAD_REQUEST)
-        calc.tax_calc_def(request.organization, company, month)
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        fills, conflicts = calc.plan_tax_calc(request.organization, request.data.get("company", ""), month)
+        return Response({"fills": fills, "conflicts": conflicts})
+
+    @action(detail=False, methods=["post"], url_path="tax-calc")
+    def tax_calc(self, request):
+        """
+        Body: {"company": "", "month": "YYYY-MM-DD", "resolutions": {"<item id>": "bt" | "at"}}.
+        "bt" keeps the 税抜 amount and recomputes 税込; "at" keeps 税込 and
+        recomputes 税抜. Conflicting rows without a resolution are left as is.
+        """
+        month = request.data.get("month")
+        if not month:
+            return Response({"detail": "month is required (YYYY-MM-DD)."}, status=status.HTTP_400_BAD_REQUEST)
+        resolutions = request.data.get("resolutions") or {}
+        if not isinstance(resolutions, dict) or any(v not in ("bt", "at") for v in resolutions.values()):
+            return Response({"detail": 'resolutions must map item id to "bt" or "at".'}, status=status.HTTP_400_BAD_REQUEST)
+        result = calc.apply_tax_calc(request.organization, request.data.get("company", ""), month, resolutions)
+        return Response(result)
 
     @action(detail=True, methods=["post"], url_path="mark-sent")
     def mark_sent(self, request, pk=None):
         invoice = self.get_object()
+        # Freeze the rounding method in effect right now (see InvoiceCode.tax_rounding).
+        invoice.tax_rounding = calc.invoice_tax_method(invoice)
         invoice.sent_at = timezone.now()
-        invoice.save(update_fields=["sent_at"])
+        invoice.save(update_fields=["sent_at", "tax_rounding"])
         return Response(self.get_serializer(invoice).data)
 
     @action(detail=True, methods=["post"], url_path="unmark-sent")
     def unmark_sent(self, request, pk=None):
         invoice = self.get_object()
+        # Keep the method it was issued with: un-sending must not re-round it.
+        invoice.tax_rounding = calc.invoice_tax_method(invoice)
         invoice.sent_at = None
-        invoice.save(update_fields=["sent_at"])
+        invoice.save(update_fields=["sent_at", "tax_rounding"])
         return Response(self.get_serializer(invoice).data)
 
 
@@ -428,6 +470,7 @@ class ImportView(APIView):
                 AccountItem.objects.filter(organization=organization).values_list(*self.DUPLICATE_FIELDS)
             )
         seen_keys = set()
+        invoices_by_period = calc.invoice_codes_by_period(organization)
 
         prepared = []
         errors = []
@@ -463,6 +506,15 @@ class ImportView(APIView):
             if mode == "replace" and serializer.validated_data.get("invoice_date") is None:
                 errors.append({"index": index, "detail": "invoice_date is required to replace a period."})
                 continue
+
+            # A sent invoice is a document the client already holds: importing
+            # into its period (adding to it or replacing it) would change it.
+            row_date = serializer.validated_data.get("invoice_date")
+            if row_date is not None:
+                sent_invoice = invoices_by_period.get((row["company"], row_date.strftime("%Y-%m")))
+                if sent_invoice is not None and sent_invoice.sent_at:
+                    errors.append({"index": index, "detail": f"Invoice {sent_invoice.account_item_slug} has already been sent; its period can no longer be imported into."})
+                    continue
 
             # company/item_code come from `row` (still plain ids from
             # _resolve_ref above), not validated_data - DRF's
@@ -573,12 +625,21 @@ def _extract_backup_rows(request):
     return rows
 
 
+def _extract_restore_decisions(request):
+    """{"decisions": {"acme-202509": "add" | "skip"}} - per period that is already partly live."""
+    body = request.data
+    decisions = body.get("decisions") if isinstance(body, dict) else None
+    if not isinstance(decisions, dict):
+        return {}
+    return {str(k): v for k, v in decisions.items() if v in ("add", "skip")}
+
+
 class RestorePreviewView(APIView):
     """
-    Read-only: never creates, updates, or deletes anything. Body: a
+    Read-only: never writes anything. Body: a
     `manage.py dumpdata` JSON backup (bare array, or {"backup": [...]}).
     Reports exactly what a RestoreApplyView call with the same body would
-    create/update/delete for the caller's own organization, and any
+    add (and which rows are already present and would be kept), and any
     conflicts that would make it refuse to run at all.
     """
 
@@ -593,18 +654,18 @@ class RestorePreviewView(APIView):
         except restore_logic.RestoreError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response({"diff": plan.diff(), "conflicts": plan.conflicts()})
+        decisions = _extract_restore_decisions(request)
+        return Response({"diff": plan.diff(decisions), "conflicts": plan.conflicts(), "periods": plan.periods(decisions)})
 
 
 class RestoreApplyView(APIView):
     """
-    Destructive: restores the caller's own organization to match the given
-    backup exactly - existing-and-still-present rows are overwritten with
-    the backup's values (at their original ids, so invoice numbers are
-    unchanged), rows present in the backup but missing live are recreated,
-    and rows that exist live but aren't in the backup are deleted. Other
-    organizations are never read or written. Requires `confirm: true` in
-    the body as a deliberate extra step beyond just POSTing a file, and
+    Add-only: creates the rows the backup has and the live database doesn't
+    (at their original ids, so invoice numbers are unchanged). Anything
+    already live is left exactly as it is - nothing is overwritten or
+    deleted, so an old backup can never alter newer data or sent invoices.
+    Other organizations are never read or written. Requires `confirm: true`
+    in the body as a deliberate extra step beyond just POSTing a file, and
     refuses (with no changes at all) if any row would collide with another
     organization's data.
 
@@ -622,8 +683,12 @@ class RestoreApplyView(APIView):
 
         try:
             plan = restore_logic.build_restore_plan(organization, rows)
-            result = plan.apply()
+            # Safety copy first (a zip next to the DB file); the restore itself
+            # then verifies inside its transaction that no existing row changed.
+            backup_file = restore_logic.backup_database_file()
+            result = plan.apply(_extract_restore_decisions(request))
         except restore_logic.RestoreError as e:
             return Response({"detail": str(e)}, status=status.HTTP_409_CONFLICT)
 
+        result["backup_file"] = backup_file.name if backup_file else None
         return Response(result)

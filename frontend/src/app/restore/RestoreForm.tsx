@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import Spinner from "@/components/Spinner";
-import { previewRestore, applyRestore } from "./actions";
+import { previewRestore, applyRestore, type RestorePeriod } from "./actions";
 
 const LABELS: Record<string, string> = {
   bank_account: "Bank accounts",
@@ -15,8 +15,12 @@ const LABELS: Record<string, string> = {
 export default function RestoreForm() {
   const [previewState, previewAction, previewPending] = useActionState(previewRestore, undefined);
   const [applyState, applyAction, applyPending] = useActionState(applyRestore, undefined);
-  const [understood, setUnderstood] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  // Per-period choice for periods that are already partly in the database.
+  // Tied to the preview it was made on, so a new preview starts from a clean slate.
+  const [picked, setPicked] = useState<{ source: unknown; map: Record<string, "add" | "skip"> }>({ source: null, map: {} });
+  const decisions = picked.source === previewState ? picked.map : {};
+  const setDecisions = (next: Record<string, "add" | "skip">) => setPicked({ source: previewState, map: next });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Buttons stay on the officially-supported formAction path (so
@@ -39,8 +43,10 @@ export default function RestoreForm() {
   }, [file, previewState, applyState]);
 
   const hasPreview = previewState && "diff" in previewState;
+  const choosable = hasPreview ? previewState.periods.filter((p) => !p.sent) : [];
+  const setAllDecisions = (choice: "add" | "skip") => setDecisions(Object.fromEntries(choosable.map((p) => [p.period, choice])));
   const hasConflicts = hasPreview && previewState.conflicts.length > 0;
-  const canApply = hasPreview && !hasConflicts && understood && file;
+  const canApply = hasPreview && !hasConflicts && file;
 
   return (
     <form className="flex flex-col gap-4">
@@ -82,43 +88,93 @@ export default function RestoreForm() {
             </>
           ) : (
             <>
-              <p className="font-medium text-slate-900">This backup matches your organization. Applying it would:</p>
+              <p className="font-medium text-slate-900">
+                This backup matches your organization. Applying it only adds what is missing — nothing that is already
+                in the database is changed or removed:
+              </p>
               <ul className="mt-2 list-disc pl-5 text-slate-600">
-                <li>
-                  Organization profile: update in place ({previewState.diff.organization.update.length} field set)
-                </li>
-                <li>Bank accounts: create/update {previewState.diff.bank_account.length} (never deleted)</li>
-                {(["item_code", "client", "account_item", "invoice_code"] as const).map((key) => {
+                {(["bank_account", "item_code", "client", "account_item", "invoice_code"] as const).map((key) => {
                   const d = previewState.diff[key];
                   return (
                     <li key={key}>
-                      {LABELS[key]}: create {d.create.length}, update {d.update.length}, delete {d.delete.length}
+                      {LABELS[key]}: add {d.create.length}, already present {d.kept.length}
+                      {d.skipped_sent > 0 && ` — ${d.skipped_sent} skipped: their invoice was already sent`}
+                      {d.remapped > 0 && ` (${d.remapped} will get a new id because its old id is used by another record)`}
                     </li>
                   );
                 })}
               </ul>
 
-              <label className="mt-4 flex items-start gap-2 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={understood}
-                  onChange={(e) => setUnderstood(e.target.checked)}
-                  className="mt-0.5 accent-red-600"
-                />
-                <span>
-                  I understand the &quot;delete&quot; rows above will be permanently removed, and this cannot be
-                  undone from here.
-                </span>
-              </label>
+              {previewState.periods.length > 0 && (
+                <div className="mt-4 border-t border-slate-200 pt-3">
+                  <p className="font-medium text-slate-900">
+                    {previewState.periods.length} period(s) are already in the database, at least in part
+                  </p>
+                  <p className="mt-1 text-slate-600">
+                    Choose per period whether to add the lines the database is missing. Periods left on &ldquo;Leave
+                    as is&rdquo; are not changed. Periods whose invoice was already sent are never changed.
+                  </p>
+                  {choosable.length > 0 && (
+                    <div className="mt-2 flex gap-2">
+                      <button type="button" className="btn-secondary" onClick={() => setAllDecisions("skip")}>Leave all as is</button>
+                      <button type="button" className="btn-secondary" onClick={() => setAllDecisions("add")}>Add missing lines to all</button>
+                    </div>
+                  )}
+                  <ul className="mt-3 divide-y divide-slate-200">
+                    {previewState.periods.map((p: RestorePeriod) => {
+                      const total = p.lines.reduce((sum, l) => sum + l.invoice_bt, 0);
+                      const choice = decisions[p.period] ?? "skip";
+                      return (
+                        <li key={p.period} className="py-2">
+                          <p className="font-medium text-slate-900">
+                            {p.company_name ?? p.period} · {p.period}
+                            {p.sent && <span className="ml-2 badge-neutral text-amber-700">sent — not changed</span>}
+                          </p>
+                          <p className="text-slate-600">
+                            In the database: {p.live_lines} line(s). Missing from it: {p.lines.length} line(s), ¥
+                            {total.toLocaleString("ja-JP")}
+                          </p>
+                          <details className="text-slate-500">
+                            <summary className="cursor-pointer">Show missing lines</summary>
+                            <ul className="mt-1 list-disc pl-5">
+                              {p.lines.map((l, i) => (
+                                <li key={i}>
+                                  {l.invoice_date} {l.action_name} — ¥{l.invoice_bt.toLocaleString("ja-JP")}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                          {!p.sent && (
+                            <div className="mt-1 flex gap-4">
+                              {(["skip", "add"] as const).map((value) => (
+                                <label key={value} className="flex items-center gap-1.5">
+                                  <input
+                                    type="radio"
+                                    name={`period-${p.period}`}
+                                    checked={choice === value}
+                                    onChange={() => setDecisions({ ...decisions, [p.period]: value })}
+                                  />
+                                  {value === "skip" ? "Leave as is" : "Add the missing lines"}
+                                </label>
+                              ))}
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+              <input type="hidden" name="decisions" value={JSON.stringify(decisions)} />
 
               <button
                 type="submit"
                 formAction={applyAction}
                 disabled={!canApply || applyPending}
-                className="btn-danger mt-3 w-fit py-2"
+                className="btn-primary mt-3 w-fit py-2"
               >
                 {applyPending && <Spinner />}
-                {applyPending ? "Restoring..." : "Apply restore"}
+                {applyPending ? "Adding..." : "Add missing data"}
               </button>
             </>
           )}
@@ -127,15 +183,30 @@ export default function RestoreForm() {
 
       {applyState && "error" in applyState && <p className="text-sm text-red-600">{applyState.error}</p>}
 
-      {applyState && "invoice_code" in applyState && (
+      {applyState && "added" in applyState && (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm">
-          <p className="font-medium text-emerald-700">Restore complete.</p>
+          <p className="font-medium text-emerald-700">Done. Existing data was left untouched.</p>
+          {applyState.backup_file && (
+            <p className="mt-1 text-slate-600">
+              A copy of the database from just before this import was saved as <code>{applyState.backup_file}</code>.
+            </p>
+          )}
+          {applyState.skipped_sent.account_item > 0 && (
+            <p className="mt-1 text-amber-700">
+              {applyState.skipped_sent.account_item} line item(s) were not added because their invoice was already sent.
+            </p>
+          )}
+          {applyState.renumbered.invoice_code > 0 && (
+            <p className="mt-1 text-amber-700">
+              {applyState.renumbered.invoice_code} invoice(s) got a new id, so their invoice number changed.
+            </p>
+          )}
           <ul className="mt-2 list-disc pl-5 text-slate-700">
-            <li>Line items: {applyState.account_item} restored, {applyState.deleted.account_item} removed</li>
-            <li>Invoices: {applyState.invoice_code} restored, {applyState.deleted.invoice_code} removed</li>
-            <li>Clients: {applyState.client} restored, {applyState.deleted.client} removed</li>
-            <li>Item codes: {applyState.item_code} restored, {applyState.deleted.item_code} removed</li>
-            <li>Bank accounts: {applyState.bank_account} restored</li>
+            {(["account_item", "invoice_code", "client", "item_code", "bank_account"] as const).map((key) => (
+              <li key={key}>
+                {LABELS[key]}: {applyState.added[key]} added, {applyState.kept[key]} already present
+              </li>
+            ))}
           </ul>
         </div>
       )}

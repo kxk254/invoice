@@ -59,5 +59,5 @@ class InvoiceCodeSerializer(serializers.ModelSerializer):
             "id", "account_item_slug", "invoice_slug", "client_id", "client_name",
             "payment_due", "invoice_bt_ttl_0", "invoice_bt_ttl", "invoice_tax_ttl",
             "invoice_at_ttl", "invoice_bt_gttl", "invoice_at_gttl", "invoice_tax_flag",
-            "sent_at", "amended", "items",
+            "sent_at", "amended", "tax_rounding", "items",
         ]

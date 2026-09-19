@@ -249,6 +249,7 @@ class CSVListView(LoginRequiredMixin, ListView):
 """
 CREATE DATABASE BACKUP
 """
+@login_required
 def local_db_backup_view(request):
     """Django view to trigger the local database backup."""
     try:
@@ -264,6 +265,7 @@ def local_db_backup_view(request):
         # Catch any other exceptions from the logic
         return HttpResponse(f"An unexpected error occurred during local backup: {e}", status=500) # Internal Server Error
 
+@login_required
 def nas_db_backup_view(request):
     """Django view to trigger copying the latest local backup to NAS."""
     try:
@@ -284,6 +286,7 @@ def nas_db_backup_view(request):
         return HttpResponse(f"An unexpected error occurred during NAS copy: {e}", status=500)
 
 # Optional: A simple view to display the links
+@login_required
 def backup_home_view(request):
     context = {
         'SOURCE_DB_PATH': backup_logic.SOURCE_DB_PATH,
@@ -295,6 +298,7 @@ def backup_home_view(request):
 """
 CREATE POSTGRES DATABASE BACKUP
 """
+@login_required
 def postgres_db_backup_to_nas_as_json(request):
     """Django view to dump json data as backup to NAS."""
     try:
@@ -310,36 +314,22 @@ def postgres_db_backup_to_nas_as_json(request):
         # Catch any other exceptions from the logic
         return HttpResponse(f"An unexpected error occurred during local backup: {e}", status=500) # Internal Server Error
 
-from django.views.decorators.csrf import csrf_exempt
-
-@csrf_exempt
+"""
+DISABLED: the old restore did `manage.py flush` (wiping EVERY organization and
+user) and then `loaddata`, was csrf_exempt, and had no login check - anyone who
+could reach the site could erase the database with one POST. Restoring is done
+from the Restore screen of the new app (invoice/restore_logic.py), which only
+ever adds missing data and never changes or deletes what is already there.
+"""
+@login_required
 def restore_view(request):
     if request.method == "POST":
-        json_file = request.FILES.get("json_file")
-        if not json_file:
-            return HttpResponse("No file uploaded", status=400)
-        
-        # save temporary
-        temp_path = f"/tmp/{json_file.name}"
-        with open(temp_path, "wb+") as f:
-            for chunk in json_file.chunks():
-                f.write(chunk)
-        
-        # Load into DB
-        try:
-            # ⚠️ Wipe all existing data
-            subprocess.run(["python", "manage.py", "flush", "--noinput"], check=True)
-            
-            # ✅ Load new data
-            subprocess.run(["python", "manage.py", "loaddata", temp_path], check=True)
-            
-            return HttpResponse(f"Restored database from {json_file.name}")
-        except subprocess.CalledProcessError as e:
-            return HttpResponse(F"Restore failed: {e}", status=500)
-        finally:
-            os.remove(temp_path)
-    else:
-        return render(request, "invoice/restore_postgres.html")
+        return HttpResponse(
+            "This restore has been disabled because it erased the whole database. "
+            "Use the Restore screen of the invoice app instead: it only adds missing data.",
+            status=410,
+        )
+    return render(request, "invoice/restore_postgres.html")
 
 
 """

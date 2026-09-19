@@ -210,6 +210,12 @@
         white-space: nowrap;
     }
 
+    table.items tbody td.month {
+        font-size: 9.5px;
+        color: #444450;
+        white-space: nowrap;
+    }
+
     table.items tbody td.note {
         font-size: 9.5px;
         color: #444450;
@@ -290,7 +296,7 @@
     <div class="meta">
         請求書番号　{{ invoice_num|format_id }}<br>
         請求書発行日　{{ invoice_date|japan_day_format }}<br>
-        対象月　{{ target_month|japan_month_format }}
+        対象月　{% for month in target_months %}{{ month|japan_month_format }}{% if not forloop.last %}、{% endif %}{% endfor %}
     </div>
 </div>
 
@@ -331,14 +337,16 @@
 
 <table class="items">
     <colgroup>
-        <col style="width: 30%">
-        <col style="width: 40%">
+        <col style="width: 24%">
+        <col style="width: 14%">
+        <col style="width: 34%">
         <col style="width: 8%">
-        <col style="width: 22%">
+        <col style="width: 20%">
     </colgroup>
     <thead>
         <tr>
             <th>品目</th>
+            <th>対象月</th>
             <th>内容・摘要</th>
             <th class="num">税率</th>
             <th class="num">金額（円）</th>
@@ -348,17 +356,19 @@
         {% for record in object %}
         <tr>
             <td>{{ record.action_name }}</td>
+            <td class="month">{{ record.action_date|japan_month_format }}</td>
             <td class="note">{{ record.action_note|caseclean }}</td>
             <td class="num">{% if record.tax_rate == 0 %}無税{% else %}{{ record.tax_rate }}%{% endif %}</td>
             <td class="num">{{ record.invoice_bt|format_with_000s }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="4">明細がありません。</td></tr>
+        <tr><td colspan="5">明細がありません。</td></tr>
         {% endfor %}
     </tbody>
     <tfoot>
         <tr>
             <td>合計</td>
+            <td></td>
             <td></td>
             <td></td>
             <td class="num">{{ total_bt_gttl|format_with_000s }}</td>

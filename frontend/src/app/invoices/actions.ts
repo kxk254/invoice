@@ -52,14 +52,48 @@ export async function applyAlignInvoiceDates(_prev: AlignDatesState, formData: F
   return result;
 }
 
-export async function runTaxCalc(formData: FormData) {
-  const company = formData.get("company");
-  const month = formData.get("month");
-  await apiMutate("/invoices/tax-calc/", "POST", {
-    company: typeof company === "string" ? company : "",
-    month,
-  });
-  revalidatePath("/invoices");
+export type TaxAmounts = { bt: number; tax: number; at: number };
+
+export type TaxCalcRow = {
+  id: number;
+  company_name: string;
+  action_name: string;
+  item_code: string;
+  invoice_date: string;
+  tax_rate: number;
+  invoice_sent: boolean;
+  current: TaxAmounts;
+};
+
+export type TaxCalcFill = TaxCalcRow & { after: TaxAmounts };
+export type TaxCalcConflict = TaxCalcRow & { if_bt: TaxAmounts; if_at: TaxAmounts };
+export type TaxCalcPlan = { fills: TaxCalcFill[]; conflicts: TaxCalcConflict[] };
+export type TaxCalcResult = { applied: number; unresolved: number; amended_invoices: number };
+export type TaxCalcResolutions = Record<number, "bt" | "at">;
+
+export async function previewTaxCalc(company: string, month: string): Promise<TaxCalcPlan | { error: string }> {
+  try {
+    const res = await apiMutate("/invoices/tax-calc-preview/", "POST", { company, month });
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof ApiError ? e.message : "Request failed." };
+  }
+}
+
+export async function applyTaxCalc(
+  company: string,
+  month: string,
+  resolutions: TaxCalcResolutions,
+): Promise<TaxCalcResult | { error: string }> {
+  try {
+    const res = await apiMutate("/invoices/tax-calc/", "POST", { company, month, resolutions });
+    const result = await res.json();
+    revalidatePath("/invoices");
+    revalidatePath("/account-items");
+    return result;
+  } catch (e) {
+    return { error: e instanceof ApiError ? e.message : "Request failed." };
+  }
 }
 
 export async function markInvoiceSent(id: number) {

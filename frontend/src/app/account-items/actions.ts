@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { apiMutate } from "@/lib/api";
+import { apiFetch, apiMutate } from "@/lib/api";
 
 const DATE_FIELDS = ["invoice_date", "payment_due", "action_date"];
 const TEXT_FIELDS = ["action_name", "action_note"];
@@ -41,7 +41,19 @@ export async function deleteAccountItem(id: number) {
 // single submit can save every edited row for the month in one request.
 const NAME_SEP = "__";
 
-export async function bulkUpdateAccountItems(formData: FormData) {
+export type BulkUpdateState = { error: string } | undefined;
+
+// Field errors come back as {field: "message"} or {field: ["message", ...]}.
+function messagesFrom(detail: unknown): string[] {
+  if (typeof detail === "string") return [detail];
+  if (Array.isArray(detail)) return detail.flatMap(messagesFrom);
+  if (detail && typeof detail === "object") return Object.values(detail).flatMap(messagesFrom);
+  return [];
+}
+
+// Returns a refusal (e.g. "that invoice was already sent") as state for the
+// form to show, rather than throwing - these are expected, not crashes.
+export async function bulkUpdateAccountItems(_prev: BulkUpdateState, formData: FormData): Promise<BulkUpdateState> {
   const rows = new Map<number, Record<string, unknown>>();
   for (const [key, value] of formData.entries()) {
     const sep = key.lastIndexOf(NAME_SEP);
@@ -52,8 +64,19 @@ export async function bulkUpdateAccountItems(formData: FormData) {
     if (!rows.has(id)) rows.set(id, { id });
     rows.get(id)![field] = coerceField(field, value);
   }
-  if (rows.size === 0) return;
+  if (rows.size === 0) return undefined;
 
-  await apiMutate("/account-items/bulk-update/", "POST", { items: Array.from(rows.values()) });
+  const res = await apiFetch("/account-items/bulk-update/", {
+    method: "POST",
+    body: JSON.stringify({ items: Array.from(rows.values()) }),
+  });
+  if (res.status === 400) {
+    const body = await res.json().catch(() => null);
+    const messages = [...new Set(messagesFrom(body?.errors ?? body?.detail))];
+    return { error: messages.length > 0 ? messages.join(" ") : "Some rows could not be saved. Nothing was changed." };
+  }
+  if (!res.ok) return { error: `Saving failed (${res.status}). Nothing was changed.` };
+
   revalidatePath("/account-items");
+  return undefined;
 }

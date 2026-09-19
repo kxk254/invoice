@@ -24,9 +24,9 @@ export function FieldInputs({
   defaults?: Partial<AccountItem>;
   nameSuffix?: string;
   stickyBg?: string;
-  // Invoice already sent: issue date is frozen (server rejects a change
-  // regardless), so the input is disabled here to make that obvious upfront
-  // rather than as a save-time error.
+  // Invoice already sent: issue date and client are frozen (server rejects a
+  // change regardless), so the inputs are disabled here to make that obvious
+  // upfront rather than as a save-time error.
   locked?: boolean;
   // Logically deleted: kept as a read-only audit row, excluded from
   // totals/PDF/CSV. A disabled input is also omitted from form submission
@@ -46,7 +46,7 @@ export function FieldInputs({
           name={n("company")}
           defaultValue={defaults?.company ?? ""}
           required
-          disabled={voided}
+          disabled={voided || locked}
           className={`${inputClass} w-full`}
         >
           <option value="" disabled>

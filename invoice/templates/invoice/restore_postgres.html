@@ -3,10 +3,10 @@
 
 {% block content %}
 
-<form method="POST" action="/restore/" enctype="multipart/form-data">
-  {% csrf_token %}
-  <input type="file" name="json_file" accept=".json" required>
-  <button type="submit">Restore Database</button>
-</form>
+<p>
+  This screen no longer restores the database: the old version erased everything before loading a file.
+  Use the <strong>Restore</strong> screen of the invoice app instead &mdash; it only adds data that is
+  missing and never changes or deletes what is already in the database.
+</p>
 
 {% endblock %}

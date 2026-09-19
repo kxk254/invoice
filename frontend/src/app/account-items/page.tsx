@@ -3,7 +3,8 @@ import type { AccountItem, Client, ItemCode, Me } from "@/lib/types";
 import Nav from "@/components/Nav";
 import AccountItemRow, { FieldInputs } from "./AccountItemRow";
 import FilterForm from "./FilterForm";
-import { createAccountItem, bulkUpdateAccountItems } from "./actions";
+import SaveForm from "./SaveForm";
+import { createAccountItem } from "./actions";
 
 // This page's list depends entirely on the `month`/`company` query string;
 // without this, some browsers/proxies can serve a cached response for the
@@ -72,7 +73,7 @@ export default async function AccountItemsPage(props: PageProps<"/account-items"
       {/* One shared form: existing rows name inputs "field__<id>" and save
           together via the button below; the "add row" draft keeps plain
           names and its own submit button, so the two never mix. */}
-      <form action={bulkUpdateAccountItems}>
+      <SaveForm>
         <div className="overflow-x-auto card">
           {/* border-separate (not border-collapse) because sticky cells
               don't stick at all inside a border-collapsed table — row
@@ -163,7 +164,7 @@ export default async function AccountItemsPage(props: PageProps<"/account-items"
             Save all changes
           </button>
         </div>
-      </form>
+      </SaveForm>
       </div>
     </>
   );

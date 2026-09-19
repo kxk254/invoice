@@ -3,13 +3,22 @@
 import { revalidatePath } from "next/cache";
 import { apiMutate, ApiError } from "@/lib/api";
 
-type ModelChange = { label: string; create: number[]; update: number[]; delete: number[] };
+type ModelChange = { label: string; create: number[]; kept: number[]; remapped: number; skipped_sent: number; skipped_partial: number };
+
+export type RestorePeriod = {
+  period: string;
+  company_name: string | null;
+  sent: boolean;
+  live_lines: number;
+  decision: "add" | "skip" | null;
+  lines: { invoice_date: string | null; action_name: string; invoice_bt: number }[];
+};
 
 export type PreviewState =
   | {
+      periods: RestorePeriod[];
       diff: {
-        organization: ModelChange;
-        bank_account: number[];
+        bank_account: ModelChange;
         item_code: ModelChange;
         client: ModelChange;
         account_item: ModelChange;
@@ -20,15 +29,10 @@ export type PreviewState =
   | { error: string }
   | undefined;
 
+type Counts = { bank_account: number; item_code: number; client: number; account_item: number; invoice_code: number };
+
 export type ApplyState =
-  | {
-      bank_account: number;
-      item_code: number;
-      client: number;
-      account_item: number;
-      invoice_code: number;
-      deleted: { invoice_code: number; account_item: number; client: number; item_code: number };
-    }
+  | { added: Counts; kept: Counts; renumbered: Counts; skipped_sent: Counts; skipped_partial: Counts; backup_file: string | null }
   | { error: string }
   | undefined;
 
@@ -69,7 +73,18 @@ export async function applyRestore(_prevState: ApplyState, formData: FormData): 
   if (!Array.isArray(backup)) return backup;
 
   try {
-    const res = await apiMutate("/restore/apply/", "POST", { backup, confirm: true });
+    // Per-period choices for periods that are already partly in the database
+    // ("add" the missing lines, or leave the period alone - the default).
+    let decisions: Record<string, "add" | "skip"> = {};
+    const raw = formData.get("decisions");
+    if (typeof raw === "string" && raw) {
+      try {
+        decisions = JSON.parse(raw);
+      } catch {
+        return { error: "Could not read the period choices." };
+      }
+    }
+    const res = await apiMutate("/restore/apply/", "POST", { backup, confirm: true, decisions });
     const body = await res.json();
     revalidatePath("/invoices");
     revalidatePath("/account-items");

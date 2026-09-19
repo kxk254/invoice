@@ -4,7 +4,9 @@ import Nav from "@/components/Nav";
 import FilterForm from "./FilterForm";
 import ExportCsvForm from "./ExportCsvForm";
 import AlignDatesForm from "./AlignDatesForm";
-import { runTaxCalc, markInvoiceSent, unmarkInvoiceSent } from "./actions";
+import TaxCalcForm from "./TaxCalcForm";
+import TaxRuleNote from "@/components/TaxRuleNote";
+import { markInvoiceSent, unmarkInvoiceSent } from "./actions";
 
 // This page's list depends entirely on the `month`/`company` query string;
 // without this, some browsers/proxies can serve a cached response for the
@@ -51,22 +53,13 @@ export default async function InvoicesPage(props: PageProps<"/invoices">) {
         <FilterForm clients={clients} company={company} month={month} number={number} />
 
         <div className="flex flex-wrap items-end gap-2">
-          <form action={runTaxCalc} className="flex items-end gap-2">
-            <input type="hidden" name="company" value={company} />
-            <input type="hidden" name="month" value={month ? monthStart(month) : ""} />
-            <button
-              type="submit"
-              disabled={!month}
-              className="btn-secondary"
-              title={month ? undefined : "Pick a month first"}
-            >
-              Recalculate tax
-            </button>
-          </form>
+          <TaxCalcForm company={company} month={month ? monthStart(month) : ""} />
 
           <AlignDatesForm company={company} month={month ? monthStart(month) : ""} />
         </div>
       </div>
+
+      <TaxRuleNote className="-mt-3 mb-4" />
 
       <ExportCsvForm
         defaultStart={month ? monthStart(month) : ""}

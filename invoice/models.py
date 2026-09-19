@@ -175,6 +175,14 @@ class InvoiceCode(models.Model):
     # a copy, so this is now a correction to an issued document (修正版), not
     # a still-in-progress draft. Never reset back to False.
     amended = models.BooleanField(verbose_name="修正版", default=False)
+    # Consumption-tax rounding method used for this invoice's totals. Blank
+    # means "not frozen yet": an unsent invoice follows calc.DEFAULT_TAX_ROUNDING,
+    # a sent one is treated as 切捨て (what every invoice used before this field
+    # existed). It is stamped when the invoice is sent (or un-sent) and never
+    # changed afterwards, so a later change of the default cannot alter an
+    # invoice the client already has.
+    TAX_ROUNDING_CHOICES = [("floor", "切捨て"), ("round", "四捨五入")]
+    tax_rounding = models.CharField(verbose_name="端数処理", max_length=10, choices=TAX_ROUNDING_CHOICES, blank=True, default="")
 
     def __str__(self):
         mmdate = self.account_item.invoice_date.strftime('%Y%m')
