@@ -1,6 +1,6 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { ACCESS_TOKEN_MAX_AGE, REFRESH_TOKEN_MAX_AGE } from "./auth-cookies";
+import { ACCESS_TOKEN_MAX_AGE } from "./auth-cookies";
 
 const cookieOpts = {
   httpOnly: true,
@@ -15,7 +15,8 @@ export async function setTokens(access: string, refresh?: string) {
   const store = await cookies();
   store.set("access_token", access, { ...cookieOpts, maxAge: ACCESS_TOKEN_MAX_AGE });
   if (refresh) {
-    store.set("refresh_token", refresh, { ...cookieOpts, maxAge: REFRESH_TOKEN_MAX_AGE });
+    // No maxAge: a session cookie, dropped when the browser closes.
+    store.set("refresh_token", refresh, cookieOpts);
   }
 }
 

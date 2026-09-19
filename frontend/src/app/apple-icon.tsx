@@ -12,7 +12,7 @@ export default function AppleIcon() {
           height: "100%",
           display: "flex",
           position: "relative",
-          background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
+          background: "linear-gradient(135deg, #0f766e 0%, #14b8a6 100%)",
           overflow: "hidden",
         }}
       >
@@ -25,10 +25,10 @@ export default function AppleIcon() {
         />
         <svg width="180" height="180" viewBox="0 0 32 32" style={{ position: "absolute" }}>
           <path
-            d="M10.5 7.5 L16 15 M21.5 7.5 L16 15 M16 15 L16 25 M11 18.5 L21 18.5 M11 21.5 L21 21.5"
+            d="M9.5 6.5 L16 15 M22.5 6.5 L16 15 M16 15 L16 26 M9.5 17 L22.5 17 M9.5 22 L22.5 22"
             fill="none"
             stroke="#ffffff"
-            strokeWidth={2.8}
+            strokeWidth={3.2}
             strokeLinecap="round"
             strokeLinejoin="round"
           />

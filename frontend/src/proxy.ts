@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ACCESS_TOKEN_MAX_AGE, REFRESH_TOKEN_MAX_AGE } from "./lib/auth-cookies";
+import { ACCESS_TOKEN_MAX_AGE } from "./lib/auth-cookies";
 
 const API_URL = process.env.DJANGO_API_URL ?? "http://localhost:8000/api/v1";
 const PUBLIC_PATHS = ["/login"];
@@ -9,7 +9,11 @@ export async function proxy(request: NextRequest) {
   const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
 
   const access = request.cookies.get("access_token")?.value;
-  if (access) {
+  const refresh = request.cookies.get("refresh_token")?.value;
+  // The refresh cookie is a session cookie (gone when the browser closes), so
+  // it marks the login session. An access cookie alone is a leftover from a
+  // closed browser and must not grant entry.
+  if (access && refresh) {
     if (isPublic) {
       return NextResponse.redirect(new URL("/account-items", request.url));
     }
@@ -20,7 +24,6 @@ export async function proxy(request: NextRequest) {
   // token. This only reads the cookie and calls the auth server — it does
   // not touch business data, so it's safe to run on every request per the
   // Proxy guidance against slow work here.
-  const refresh = request.cookies.get("refresh_token")?.value;
   if (refresh) {
     const refreshRes = await fetch(`${API_URL}/token/refresh/`, {
       method: "POST",
@@ -45,7 +48,6 @@ export async function proxy(request: NextRequest) {
           secure: process.env.NODE_ENV === "production",
           sameSite: "lax",
           path: "/",
-          maxAge: REFRESH_TOKEN_MAX_AGE,
         });
       }
       return response;

@@ -98,15 +98,15 @@ export default async function AccountItemsPage(props: PageProps<"/account-items"
               clipping numbers) as the viewport narrows. An explicit width
               locks every column at its declared size and lets the
               overflow-x-auto wrapper scroll instead. */}
-          <table className="w-[1664px] table-fixed border-separate border-spacing-0 text-sm">
+          <table className="w-[1612px] table-fixed border-separate border-spacing-0 text-sm">
             <colgroup>
-              <col className="w-40" />
-              <col className="w-36" />
+              <col className="w-32" />
+              <col className="w-28" />
               <col className="w-32" />
               <col className="w-32" />
               <col className="w-32" />
-              <col className="w-56" />
-              <col className="w-64" />
+              <col className="w-[158px]" />
+              <col className="w-[334px]" />
               <col className="w-20" />
               <col className="w-28" />
               <col className="w-28" />
@@ -116,7 +116,7 @@ export default async function AccountItemsPage(props: PageProps<"/account-items"
             <thead>
               <tr className="bg-slate-50 text-left text-xs font-medium text-slate-500">
                 <th className="sticky left-0 z-20 border-b-2 border-slate-200 bg-slate-50 p-2">Client</th>
-                <th className="sticky left-40 z-20 border-b-2 border-r border-slate-200 bg-slate-50 p-2">
+                <th className="sticky left-32 z-20 border-b-2 border-r border-slate-200 bg-slate-50 p-2">
                   Item code
                 </th>
                 <th className="border-b-2 border-slate-200 p-2">Invoice date</th>

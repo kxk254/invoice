@@ -13,4 +13,5 @@
 // always disappears first, so that existing "absent -> refresh" path always
 // fires in time.
 export const ACCESS_TOKEN_MAX_AGE = 60 * 25;
-export const REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 7;
+// The refresh-token cookie deliberately has no maxAge (session cookie), so
+// closing the browser forces a fresh login.
